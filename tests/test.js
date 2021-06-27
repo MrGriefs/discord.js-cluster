@@ -1,8 +1,9 @@
 const Sharder = require("../src/index").Master;
+const path = require('path');
 
 require('dotenv').config();
 
-let sharder = new Sharder(`Bot ${process.env.TOKEN}`, "/main.js", {
+let sharder = new Sharder(`Bot ${process.env.TOKEN}`, path.join(__dirname, 'main.js'), {
     name: "Travis CLI",
     stats: true,
     clusters: 2,
