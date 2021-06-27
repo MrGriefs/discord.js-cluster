@@ -1,5 +1,5 @@
 {
-  "name": "discordjs-sharder",
+  "name": "discordjs-cluster",
   "version": "1.0.0",
   "description": "A sharder for the Discord.js library",
   "main": "./src/index.js",
@@ -18,11 +18,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MrGriefs/discordjs-sharder.git"
+    "url": "git+https://github.com/MrGriefs/discordjs-cluster.git"
   },
   "keywords": [
     "discord.js",
+    "discordjs",
     "sharder",
+    "cluster",
     "sharding",
     "discord"
   ],
@@ -32,7 +34,7 @@
   "author": "Reece Stokes <hagen@paw.bot>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/MrGriefs/discordjs-sharder/issues"
+    "url": "https://github.com/MrGriefs/discordjs-cluster/issues"
   },
-  "homepage": "https://github.com/MrGriefs/discordjs-sharder#readme"
+  "homepage": "https://github.com/MrGriefs/discordjs-cluster#readme"
 }

@@ -455,7 +455,7 @@ class ClusterManager extends EventEmitter {
                 margin: 2
             })
                 .emptyLine()
-                .right(`discordjs-sharder ${pkg.version}`)
+                .right(`discordjs-cluster ${pkg.version}`)
                 .emptyLine()
                 .render()
         );
