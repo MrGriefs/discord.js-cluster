@@ -32,6 +32,7 @@ class Logger {
      * @memberof Logger
      */
     log(source, msg) {
+        // @ts-ignore
         let message = colors.log(msg)
         log(`${source} | ${message}`);
     }
@@ -44,6 +45,7 @@ class Logger {
      * @memberof Logger
      */
     info(source, msg) {
+        // @ts-ignore
         let message = colors.info(msg)
         log(`${source} | ${message}`);
     }
@@ -56,6 +58,7 @@ class Logger {
      * @memberof Logger
      */
     warn(source, msg) {
+        // @ts-ignore
         let message = colors.warn(msg)
         log(`${source} | ${message}`);
     }
@@ -68,6 +71,7 @@ class Logger {
      * @memberof Logger
      */
     error(source, msg) {
+        // @ts-ignore
         let message = colors.error(msg)
         log(`${source} | ${message}`);
     }
@@ -80,6 +84,7 @@ class Logger {
      * @memberof Logger
      */
     data(source, msg) {
+        // @ts-ignore
         let message = colors.data(msg)
         log(`${source} | ${message}`);
     }
@@ -92,6 +97,7 @@ class Logger {
      * @memberof Logger
      */
     debug(source, msg) {
+        // @ts-ignore
         let message = colors.debug(msg)
         log(`${source} | ${message}`);
     }

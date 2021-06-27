@@ -1,15 +1,8 @@
-let Eris;
-
-try {
-    Eris = require("eris-additions")(require("eris"));
-} catch (err) {
-    Eris = require("eris");
-}
-
+const Discord = require('discord.js');
 const Base = require("../structures/Base.js");
-const SyncedRequestHandler = require('../structures/SyncedRequestHandler.js');
 const { inspect } = require('util');
 const IPC = require("../structures/IPC.js");
+const nath = require('path');
 
 /**
  * 
@@ -20,10 +13,9 @@ class Cluster {
 
     /**
      * Creates an instance of Cluster.
-     * @param {any} clusterID 
      * @memberof Cluster
      */
-    constructor() {
+    constructor(client) {
 
         this.shards = 0;
         this.maxShards = 0;
@@ -37,11 +29,13 @@ class Cluster {
         this.uptime = 0;
         this.exclusiveGuilds = 0;
         this.largeGuilds = 0;
-        this.voiceChannels = 0;
+        this.channels = 0;
         this.shardsStats = [];
         this.app = null;
         this.bot = null;
         this.test = false;
+        /** @private */
+        this._client = client;
 
         this.ipc = new IPC();
 
@@ -63,7 +57,12 @@ class Cluster {
             process.send({ name: "error", msg: err.stack });
         });
 
-        process.on('unhandledRejection', (reason, p) => {
+        process.on('unhandledRejection',
+        /**
+         * @param {Error} reason
+         * @param {Promise} p
+         */
+        (reason, p) => {
             process.send({ name: "error", msg: `Unhandled rejection at: Promise  ${p} reason:  ${reason.stack}` });
         });
 
@@ -100,7 +99,7 @@ class Cluster {
                                 shards: this.shards,
                                 exclusiveGuilds: this.exclusiveGuilds,
                                 largeGuilds: this.largeGuilds,
-                                voice: this.voiceChannels,
+                                channels: this.channels,
                                 shardsStats: this.shardsStats
                             }
                         });
@@ -110,7 +109,7 @@ class Cluster {
                     case "fetchUser": {
                         if (!this.bot) return;
                         let id = msg.value;
-                        let user = this.bot.users.get(id);
+                        let user = this.bot.users.resolve(id);
                         if (user) {
                             process.send({ name: "fetchReturn", value: user });
                         }
@@ -120,10 +119,9 @@ class Cluster {
                     case "fetchChannel": {
                         if (!this.bot) return;
                         let id = msg.value;
-                        let channel = this.bot.getChannel(id);
+                        let channel = this.bot.channels.resolve(id);
                         if (channel) {
-                            channel = channel.toJSON();
-                            return process.send({ name: "fetchReturn", value: channel });
+                            process.send({ name: "fetchReturn", value: channel.toJSON() });
                         }
 
                         break;
@@ -131,10 +129,9 @@ class Cluster {
                     case "fetchGuild": {
                         if (!this.bot) return;
                         let id = msg.value;
-                        let guild = this.bot.guilds.get(id);
+                        let guild = this.bot.guilds.resolve(id);
                         if (guild) {
-                            guild = guild.toJSON();
-                            process.send({ name: "fetchReturn", value: guild });
+                            process.send({ name: "fetchReturn", value: guild.toJSON() });
                         }
 
                         break;
@@ -143,14 +140,13 @@ class Cluster {
                         if (!this.bot) return;
                         let [guildID, memberID] = msg.value;
 
-                        let guild = this.bot.guilds.get(guildID);
+                        let guild = this.bot.guilds.resolve(guildID);
 
                         if (guild) {
-                            let member = guild.members.get(memberID);
+                            let member = guild.members.resolve(memberID);
 
                             if (member) {
-                                member = member.toJSON();
-                                process.send({ name: "fetchReturn", value: member });
+                                process.send({ name: "fetchReturn", value: member.toJSON() });
                             }
                         }
 
@@ -180,20 +176,24 @@ class Cluster {
     connect(firstShardID, lastShardID, maxShards, token, type, clientOptions) {
         process.send({ name: "log", msg: `Connecting with ${this.shards} shard(s)` });
 
-        let options = { autoreconnect: true, firstShardID: firstShardID, lastShardID: lastShardID, maxShards: maxShards };
-        let optionss = Object.keys(options);
-        optionss.forEach(key => {
+        // let options = { autoreconnect: true, firstShardID: firstShardID, lastShardID: lastShardID, maxShards: maxShards };
+        let options = {
+            shards: Array.from({ length: lastShardID - firstShardID + 1 }, (_, i) => firstShardID + i),
+            shardCount: maxShards,
+            retryLimit: Infinity
+        };
+        Object.keys(options).forEach(key => {
             delete clientOptions[key];
         });
 
         Object.assign(options, clientOptions);
 
-        const bot = new Eris(token, options);
+        const bot = new this._client(options);
         this.bot = bot;
 
-        this.bot.requestHandler = new SyncedRequestHandler(this.ipc, {
-            timeout: this.bot.options.requestTimeout
-        });
+        // this.bot.requestHandler = new SyncedRequestHandler(this.ipc, {
+        //     timeout: this.bot.options.requestTimeout
+        // });
 
         bot.on("connect", id => {
             process.send({ name: "log", msg: `Shard ${id} established connection!` });
@@ -217,6 +217,15 @@ class Cluster {
             process.send({ name: "shard", embed: embed });
         });
 
+        bot.on("shardReconnecting", id => {
+            process.send({ name: "log", msg: `Shard ${id} is reconnecting!` });
+            let embed = {
+                title: "Shard Status Update",
+                description: `Shard ${id} reconnecting!`
+            }
+            process.send({ name: "shard", embed: embed });
+        });
+
         bot.on("shardResume", id => {
             process.send({ name: "log", msg: `Shard ${id} has resumed!` });
             let embed = {
@@ -226,21 +235,25 @@ class Cluster {
             process.send({ name: "shard", embed: embed });
         });
 
-        bot.on("warn", (message, id) => {
-            process.send({ name: "warn", msg: `Shard ${id} | ${message}` });
-        });
-
-        bot.on("error", (error, id) => {
+        bot.on("shardError", (error, id) => {
             process.send({ name: "error", msg: `Shard ${id} | ${error.stack}` });
         });
 
-        bot.once("ready", id => {
+        bot.on("warn", (message) => {
+            process.send({ name: "warn", msg: `${message}` });
+        });
+
+        bot.on("error", (error) => {
+            process.send({ name: "error", msg: `${error.stack}` });
+        });
+
+        bot.once("ready", _ => {
             this.loadCode(bot);
 
             this.startStats(bot);
         });
 
-        bot.on("ready", id => {
+        bot.on("ready", _ => {
             process.send({ name: "log", msg: `Shards ${this.firstShardID} - ${this.lastShardID} are ready!` });
             let embed = {
                 title: `Cluster ${this.clusterID} is ready!`,
@@ -252,7 +265,7 @@ class Cluster {
         });
 
         if (!this.test) {
-            bot.connect();
+            bot.login(token);
         } else {
             process.send({ name: "shardsStarted" });
             this.loadCode(bot);
@@ -260,12 +273,7 @@ class Cluster {
     }
 
     loadCode(bot) {
-        let rootPath = process.cwd();
-        rootPath = rootPath.replace(`\\`, "/");
-
-
-        let path = `${rootPath}${this.mainFile}`;
-        let app = require(path);
+        let app = require(nath.isAbsolute(this.mainFile) ? this.mainFile : nath.join(process.cwd(), this.mainFile));
         if (app.default !== undefined) app = app.default;
         if (app.prototype instanceof Base) {
             this.app = new app({ bot: bot, clusterID: this.clusterID, ipc: this.ipc });
@@ -277,18 +285,17 @@ class Cluster {
 
     startStats(bot) {
         setInterval(() => {
-            this.guilds = bot.guilds.size;
-            this.users = bot.users.size;
+            this.guilds = bot.guilds.cache.size;
+            this.users = bot.users.cache.size;
             this.uptime = bot.uptime;
-            this.voiceChannels = bot.voiceConnections.size;
-            this.largeGuilds = bot.guilds.filter(g => g.large).length;
-            this.exclusiveGuilds = bot.guilds.filter(g => g.members.filter(m => m.bot).length === 1).length;
+            this.channels = bot.channels.size;
+            this.largeGuilds = bot.guilds.cache.filter(g => g.large).size;
+            this.exclusiveGuilds = bot.guilds.cache.filter(g => g.members.cache.filter(m => m.bot).length === 1).size;
             this.shardsStats = [];
-            this.bot.shards.forEach(shard => {
+            this.bot.ws.shards.forEach(shard => {
                 this.shardsStats.push({
                     id: shard.id,
-                    ready: shard.ready,
-                    latency: shard.latency,
+                    ping: shard.ping,
                     status: shard.status
                 });
             });

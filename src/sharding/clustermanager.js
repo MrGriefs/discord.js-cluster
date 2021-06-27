@@ -3,9 +3,9 @@ const cluster = require("./cluster.js");
 const numCPUs = require('os').cpus().length;
 const logger = require("../utils/logger.js");
 const EventEmitter = require("events");
-const Eris = require("eris");
+const Discord = require("discord.js");
 const Queue = require("../utils/queue.js");
-const pkg = require("../../package.json")
+const pkg = require("../../package.json");
 
 /**
  * 
@@ -29,6 +29,8 @@ class ClusterManager extends EventEmitter {
         this.lastShardID = options.lastShardID || 0;
         this.clusterCount = options.clusters || numCPUs;
         this.clusterTimeout = options.clusterTimeout * 1000 || 5000;
+        this.test = options.test || false;
+        this.client = options.client || Discord.Client;
 
         this.token = token || false;
 
@@ -44,7 +46,7 @@ class ClusterManager extends EventEmitter {
 
         this.statsInterval = options.statsInterval || 60 * 1000;
         this.mainFile = mainFile;
-        this.name = options.name || "Eris-Sharder";
+        this.name = options.name || "DiscordJS-Sharder";
         this.guildsPerShard = options.guildsPerShard || 1300;
 
         this.webhooks = Object.assign({
@@ -62,7 +64,7 @@ class ClusterManager extends EventEmitter {
                     guilds: 0,
                     users: 0,
                     totalRam: 0,
-                    voice: 0,
+                    channels: 0,
                     exclusiveGuilds: 0,
                     largeGuilds: 0,
                     clusters: []
@@ -72,7 +74,8 @@ class ClusterManager extends EventEmitter {
         }
 
         if (this.token) {
-            this.eris = new Eris(token);
+            this.bot = new this.client();
+            this.bot.token = this.token;
             this.launch(false);
         } else {
             throw new Error("No token provided");
@@ -90,7 +93,7 @@ class ClusterManager extends EventEmitter {
                 this.stats.stats.users = 0;
                 this.stats.stats.totalRam = 0;
                 this.stats.stats.clusters = [];
-                this.stats.stats.voice = 0;
+                this.stats.stats.channels = 0;
                 this.stats.stats.exclusiveGuilds = 0;
                 this.stats.stats.largeGuilds = 0;
                 this.stats.clustersCounted = 0;
@@ -123,8 +126,7 @@ class ClusterManager extends EventEmitter {
     /**
      * 
      * 
-     * @param {any} amount 
-     * @param {any} numSpawned 
+     * @param {any} clusterID 
      * @memberof ClusterManager
      */
     start(clusterID) {
@@ -198,7 +200,7 @@ class ClusterManager extends EventEmitter {
                 this.start(0);
             });
         } else if (master.isWorker) {
-            const Cluster = new cluster();
+            const Cluster = new cluster(this.client);
             Cluster.spawn();
         }
 
@@ -240,7 +242,7 @@ class ClusterManager extends EventEmitter {
                     case "stats":
                         this.stats.stats.guilds += message.stats.guilds;
                         this.stats.stats.users += message.stats.users;
-                        this.stats.stats.voice += message.stats.voice;
+                        this.stats.stats.channels += message.stats.channels;
                         this.stats.stats.totalRam += message.stats.ram;
                         let ram = message.stats.ram / 1000000;
                         this.stats.stats.exclusiveGuilds += message.stats.exclusiveGuilds;
@@ -250,7 +252,7 @@ class ClusterManager extends EventEmitter {
                             shards: message.stats.shards,
                             guilds: message.stats.guilds,
                             ram: ram,
-                            voice: message.stats.voice,
+                            channels: message.stats.channels,
                             uptime: message.stats.uptime,
                             exclusiveGuilds: message.stats.exclusiveGuilds,
                             largeGuilds: message.stats.largeGuilds,
@@ -273,7 +275,7 @@ class ClusterManager extends EventEmitter {
                             this.emit("stats", {
                                 guilds: this.stats.stats.guilds,
                                 users: this.stats.stats.users,
-                                voice: this.stats.stats.voice,
+                                channels: this.stats.stats.channels,
                                 exclusiveGuilds: this.stats.stats.exclusiveGuilds,
                                 largeGuilds: this.stats.stats.largeGuilds,
                                 totalRam: this.stats.stats.totalRam / 1000000,
@@ -319,12 +321,18 @@ class ClusterManager extends EventEmitter {
                         let response;
                         let error;
 
-                        let { method, url, auth, body, file, _route, short } = message;
+                        let { method, url, auth, body, file, _route } = message;
 
                         if (file && file.file) file.file = Buffer.from(file.file, 'base64');
 
                         try {
-                            response = await this.eris.requestHandler.request(method, url, auth, body, file, _route, short);
+                            // @ts-ignore - private variable my ass
+                            response = this.bot.rest.request(method, url, {
+                                auth,
+                                route: _route,
+                                files: [ file ],
+                                data: body,
+                            })
                         } catch (err) {
                             error = {
                                 code: err.code,
@@ -389,6 +397,7 @@ class ClusterManager extends EventEmitter {
 
     connectShards() {
         for (let clusterID in [...Array(this.clusterCount).keys()]) {
+            // @ts-ignore
             clusterID = parseInt(clusterID);
 
             let cluster = this.clusters.get(clusterID);
@@ -431,7 +440,7 @@ class ClusterManager extends EventEmitter {
         let token = this.webhooks[type].token;
         embed.timestamp = new Date();
         if (id && token) {
-            this.eris.executeWebhook(id, token, { embeds: [embed] });
+            new Discord.WebhookClient(id, token).send({ embeds: [embed] })
         }
     }
 
@@ -496,17 +505,13 @@ class ClusterManager extends EventEmitter {
     }
 
     async calculateShards() {
-        let shards = this.shardCount;
-
-        let result = await this.eris.getBotGateway();
-        shards = result.shards;
+        const shards = await Discord.Util.fetchRecommendedShards(this.token, 1000);
 
         if (shards === 1) {
             return Promise.resolve(shards);
         } else {
             let guildCount = shards * 1000;
-            let guildsPerShard = this.guildsPerShard;
-            let shardsDecimal = guildCount / guildsPerShard;
+            let shardsDecimal = guildCount / this.guildsPerShard;
             let finalShards = Math.ceil(shardsDecimal);
             return Promise.resolve(finalShards);
         }
