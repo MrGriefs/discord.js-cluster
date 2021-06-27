@@ -3,11 +3,11 @@
 <p align="center">
 <a href="https://patreon.com/yeen"><img alt="Patreon" src="https://img.shields.io/badge/patreon-donate?color=F77F6F&labelColor=F96854&logo=patreon&logoColor=ffffff"></a>
 <a href="https://discord.gg/eazpsZNrRk"><img alt="Discord" src="https://img.shields.io/discord/368557500884189186?color=7389D8&labelColor=6A7EC2&logo=discord&logoColor=ffffff"></a>
-<img href="https://www.travis-ci.org/github/MrGriefs/discordjs-cluster" alt="Travis (.org)" src="https://img.shields.io/travis/MrGriefs/discordjs-cluster">
-<img href="https://www.npmjs.com/package/discordjs-cluster" alt="David" src="https://img.shields.io/david/MrGriefs/discordjs-cluster">
-<img href="https://www.npmjs.com/package/discordjs-cluster" alt="node-current" src="https://img.shields.io/node/v/discordjs-cluster">
-<img href="https://www.npmjs.com/package/discordjs-cluster" alt="GitHub package.json version" src="https://img.shields.io/github/package-json/v/MrGriefs/discordjs-cluster">
-<a href="https://npm.runkit.com/discordjs-cluster"><img alt="RunKit" src="https://img.shields.io/badge/Run-Kit-red"></a>
+<img href="https://www.travis-ci.org/github/MrGriefs/discord.js-cluster" alt="Travis (.org)" src="https://img.shields.io/travis/MrGriefs/discord.js-cluster">
+<img href="https://www.npmjs.com/package/discord.js-cluster" alt="David" src="https://img.shields.io/david/MrGriefs/discord.js-cluster">
+<img href="https://www.npmjs.com/package/discord.js-cluster" alt="node-current" src="https://img.shields.io/node/v/discord.js-cluster">
+<img href="https://www.npmjs.com/package/discord.js-cluster" alt="GitHub package.json version" src="https://img.shields.io/github/package-json/v/MrGriefs/discord.js-cluster">
+<a href="https://npm.runkit.com/discord.js-cluster"><img alt="RunKit" src="https://img.shields.io/badge/Run-Kit-red"></a>
 </p>
 
 ## Table of Contents
@@ -20,7 +20,7 @@
 
 ## About
 
-DiscordJS Cluster is a fork of [Eris Sharder](https://www.npmjs.org/package/eris-sharder), proposing a powerful sharding manager for the Discord.js library, using [Node.js's cluster](https://nodejs.org/api/cluster.html) module to spread shards evenly among all cores.
+Discord.js Cluster is a fork of [Eris Sharder](https://www.npmjs.org/package/eris-sharder), proposing a powerful sharding manager for the Discord.js library, using [Node.js's cluster](https://nodejs.org/api/cluster.html) module to spread shards evenly among all cores.
 All features are on-par with [Eris Sharder](https://www.npmjs.org/package/eris-sharder), anything that gets added to [Eris Sharder](https://www.npmjs.org/package/eris-sharder) will get added here too.
 
 ## Installation
@@ -28,13 +28,13 @@ All features are on-par with [Eris Sharder](https://www.npmjs.org/package/eris-s
 With npm:  
 
 ```bash
-$ npm install discordjs-cluster
+$ npm install discord.js-cluster
 ```
 
 With yarn:  
 
 ```bash
-$ yarn add discordjs-cluster
+$ yarn add discord.js-cluster
 ```
 
 ## Usage
@@ -42,14 +42,14 @@ $ yarn add discordjs-cluster
 In index.js:
 
 ```javascript
-const Sharder = require('discordjs-cluster').Master;
+const Sharder = require('discord.js-cluster').Master;
 const sharder = new Sharder(token, pathToMainFile, options);
 ```
 
 In main.js
 
 ```javascript
-const Base = require('discordjs-cluster').Base;
+const Base = require('discord.js-cluster').Base;
 module.exports = class extends Base{
     constructor(bot) {
         super(bot);
@@ -70,7 +70,7 @@ In this example the directory tree will look something like this:
 ```
 Project/
 ├── node-modules/
-│   ├── discordjs-cluster
+│   ├── discord.js-cluster
 |
 ├── src/
 │   ├── main.js
@@ -81,7 +81,7 @@ Project/
 #### Example of main.js
 
 ```javascript
-const Base = require('discordjs-cluster').Base;
+const Base = require('discord.js-cluster').Base;
 module.exports = class extends Base{
     constructor(bot) {
         super(bot);
@@ -98,7 +98,7 @@ module.exports = class extends Base{
 
 ```javascript
 const Discord = require('discord.js');
-const Sharder = require('discordjs-cluster').Master;
+const Sharder = require('discord.js-cluster').Master;
 const sharder = new Sharder('Bot Token', 'src/main.js', {
   client: ExtendedClient, // Optional: Pass in an extended d.js client to use instead
   stats: true,
@@ -154,11 +154,11 @@ To see an example, click [here](https://github.com/Discord-Sharders/eris-sharder
 
 ### IPC
 
-discordjs-cluster supports a variety of IPC events. All IPC events can be used via `process.send({type: "event"});`
+discord.js-cluster supports a variety of IPC events. All IPC events can be used via `process.send({type: "event"});`
 
 #### Logging
 
-discordjs-cluster supports the following IPC logging events.
+discord.js-cluster supports the following IPC logging events.
 
 | Name  | Example                                          | Description                      |
 |-------|--------------------------------------------------|----------------------------------|
