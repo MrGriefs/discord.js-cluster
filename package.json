@@ -21,13 +21,13 @@
     "url": "git+https://github.com/MrGriefs/discordjs-sharder.git"
   },
   "keywords": [
-    "eris",
+    "discord.js",
     "sharder",
     "sharding",
     "discord"
   ],
   "engines": {
-    "node": ">=8.0.0"
+    "node": ">=14.0.0"
   },
   "author": "Reece Stokes <hagen@paw.bot>",
   "license": "MIT",
