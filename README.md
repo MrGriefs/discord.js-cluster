@@ -3,7 +3,7 @@
 <p align="center">
 <a href="https://patreon.com/yeen"><img alt="Patreon" src="https://img.shields.io/badge/patreon-donate?color=F77F6F&labelColor=F96854&logo=patreon&logoColor=ffffff"></a>
 <a href="https://discord.gg/eazpsZNrRk"><img alt="Discord" src="https://img.shields.io/discord/368557500884189186?color=7389D8&labelColor=6A7EC2&logo=discord&logoColor=ffffff"></a>
-<img href="https://www.travis-ci.org/github/MrGriefs/discord.js-cluster" alt="Travis (.org)" src="https://img.shields.io/travis/MrGriefs/discord.js-cluster">
+<img href="https://www.travis-ci.com/github/MrGriefs/discordjs-sharder" alt="Travis (.com)" src="https://img.shields.io/travis/MrGriefs/discordjs-sharder">
 <img href="https://www.npmjs.com/package/discord.js-cluster" alt="David" src="https://img.shields.io/david/MrGriefs/discord.js-cluster">
 <img href="https://www.npmjs.com/package/discord.js-cluster" alt="node-current" src="https://img.shields.io/node/v/discord.js-cluster">
 <img href="https://www.npmjs.com/package/discord.js-cluster" alt="GitHub package.json version" src="https://img.shields.io/github/package-json/v/MrGriefs/discord.js-cluster">
