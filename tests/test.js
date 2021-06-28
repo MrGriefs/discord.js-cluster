@@ -14,3 +14,5 @@ let sharder = new Sharder(`Bot ${process.env.TOKEN}`, path.join(__dirname, 'main
 sharder.on("stats", stats => {
     console.log(stats)
 });
+
+if (sharder.isMaster()) setTimeout(process.exit, 60000);
