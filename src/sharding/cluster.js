@@ -48,7 +48,7 @@ class Cluster {
     }
 
     logOverride(message) {
-        if (typeof message == 'object') return inspect(message);
+        if (typeof message !== 'string') return inspect(message);
         else return message;
     }
 
