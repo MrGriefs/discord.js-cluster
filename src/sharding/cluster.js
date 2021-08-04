@@ -288,7 +288,7 @@ class Cluster {
             this.guilds = bot.guilds.cache.size;
             this.users = bot.users.cache.size;
             this.uptime = bot.uptime;
-            this.channels = bot.channels.size;
+            this.channels = bot.channels.cache.size;
             this.largeGuilds = bot.guilds.cache.filter(g => g.large).size;
             this.exclusiveGuilds = bot.guilds.cache.filter(g => g.members.cache.filter(m => m.bot).length === 1).size;
             this.shardsStats = [];
