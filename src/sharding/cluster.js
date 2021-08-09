@@ -15,7 +15,7 @@ class Cluster {
      * Creates an instance of Cluster.
      * @memberof Cluster
      */
-    constructor(client) {
+    constructor(client, { debug }) {
 
         this.shards = 0;
         this.maxShards = 0;
@@ -34,6 +34,7 @@ class Cluster {
         this.app = null;
         this.bot = null;
         this.test = false;
+        this.debug = debug;
         /** @private */
         this._client = client;
 
@@ -194,6 +195,8 @@ class Cluster {
         // this.bot.requestHandler = new SyncedRequestHandler(this.ipc, {
         //     timeout: this.bot.options.requestTimeout
         // });
+
+        if (this.debug) bot.on('debug', console.debug);
 
         bot.on("connect", id => {
             process.send({ name: "log", msg: `Shard ${id} established connection!` });
