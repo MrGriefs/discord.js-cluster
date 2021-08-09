@@ -74,8 +74,6 @@ class ClusterManager extends EventEmitter {
         }
 
         if (this.token) {
-            this.bot = new this.client();
-            this.bot.token = this.token;
             this.launch(false);
         } else {
             throw new Error("No token provided");
@@ -152,7 +150,7 @@ class ClusterManager extends EventEmitter {
 
             this.connectShards();
         } else {
-            let worker = master.fork();
+            let worker = master.fork({ SHARDING_MANAGER: true });
             this.clusters.set(clusterID, { workerID: worker.id });
             this.workers.set(worker.id, clusterID);
             logger.info("Cluster Manager", `Launching cluster ${clusterID}`);
@@ -200,7 +198,7 @@ class ClusterManager extends EventEmitter {
                 this.start(0);
             });
         } else if (master.isWorker) {
-            const Cluster = new cluster(this.client);
+            const Cluster = new cluster(this.client, { debug: this.options.debug });
             Cluster.spawn();
         }
 
@@ -477,7 +475,7 @@ class ClusterManager extends EventEmitter {
 
         let shards = cluster.shardCount;
 
-        let newWorker = master.fork();
+        let newWorker = master.fork({ SHARDING_MANAGER: true });
 
         this.workers.delete(worker.id);
 
@@ -505,7 +503,7 @@ class ClusterManager extends EventEmitter {
     }
 
     async calculateShards() {
-        const shards = await Discord.Util.fetchRecommendedShards(this.token, 1000);
+        const shards = await Discord.Util.fetchRecommendedShards(this.token, { guildsPerShard: 1000 });
 
         if (shards === 1) {
             return Promise.resolve(shards);
