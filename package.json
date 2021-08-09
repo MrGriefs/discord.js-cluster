@@ -6,7 +6,7 @@
   "dependencies": {
     "asciiart-logo": "^0.2.6",
     "colors": "^1.1.2",
-    "discord.js": "^12.5.3",
+    "discord.js": "^13.0.1",
     "fancy-log": "^1.3.0"
   },
   "devDependencies": {
@@ -29,7 +29,7 @@
     "discord"
   ],
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=16.6.0"
   },
   "author": "Reece Stokes <hagen@paw.bot>",
   "license": "MIT",
