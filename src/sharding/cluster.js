@@ -159,6 +159,10 @@ class Cluster {
                     case "restart":
                         process.exit(1);
                         break;
+                    case "eval":
+                        try { (0, eval)(msg.message) }
+                        catch(e) { console.error(`Error while evaluating: `, e) };
+                        break;
                 }
             }
         });

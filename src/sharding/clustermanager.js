@@ -299,7 +299,6 @@ class ClusterManager extends EventEmitter {
                         this.callbacks.set(message.memberID, clusterID);
                         break;
                     case "fetchReturn":
-                        console.log(message);
                         let callback = this.callbacks.get(message.value.id);
 
                         let cluster = this.clusters.get(callback);
@@ -310,7 +309,7 @@ class ClusterManager extends EventEmitter {
                         }
                         break;
                     case "broadcast":
-                        this.broadcast(0, message.msg);
+                        this.broadcast(message.msg, message.msg.clusterId);
                         break;
                     case "send":
                         this.sendTo(message.cluster, message.msg)
@@ -523,12 +522,10 @@ class ClusterManager extends EventEmitter {
         }
     }
 
-    broadcast(start, message) {
-        let cluster = this.clusters.get(start);
-        if (cluster) {
-            master.workers[cluster.workerID].send(message);
-            this.broadcast(start + 1, message);
-        }
+    broadcast(message, clusterId) {
+        if (clusterId == Infinity || clusterId > 0) return [...this.clusters.keys()].forEach(id => this.broadcast(message, id));
+        let cluster = this.clusters.get(clusterId);
+        if (cluster) master.workers[cluster.workerID].send(message);
     }
 
     sendTo(cluster, message) {
