@@ -522,8 +522,8 @@ class ClusterManager extends EventEmitter {
         }
     }
 
-    broadcast(message, clusterId) {
-        if (clusterId == Infinity || clusterId > 0) return [...this.clusters.keys()].forEach(id => this.broadcast(message, id));
+    broadcast(message, clusterId = -1) {
+        if (clusterId == Infinity || clusterId < 0) return [...this.clusters.keys()].forEach(id => this.broadcast(message, id));
         let cluster = this.clusters.get(clusterId);
         if (cluster) master.workers[cluster.workerID].send(message);
     }
