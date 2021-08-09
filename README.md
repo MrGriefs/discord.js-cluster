@@ -50,7 +50,7 @@ In main.js
 
 ```javascript
 const Base = require('discord.js-cluster').Base;
-module.exports = class extends Base{
+module.exports = class extends Base {
     constructor(bot) {
         super(bot);
     }
@@ -117,10 +117,10 @@ const sharder = new Sharder('Bot Token', 'src/main.js', {
   },
   // Optional: Options for the Discord.js Client
   clientOptions: {
-      messageCacheMaxSize: 500,
-      ws: {
-        intents: Discord.Intents..NON_PRIVILEGED
-      }
+    allowedMentions: { users: [], roles: [], repliedUser: false },
+    intents: [
+      Discord.Intents.GUILD_MESSAGES
+    ]
   }
 });
 
