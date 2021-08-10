@@ -12,7 +12,8 @@ let sharder = new Sharder(`Bot ${process.env.TOKEN}`, path.join(__dirname, 'main
     debug: true,
     clientOptions: {
         intents: [
-            Intents.FLAGS.GUILD_MESSAGES
+            Intents.FLAGS.GUILD_MESSAGES,
+            Intents.FLAGS.GUILDS
         ]
     }
 });
