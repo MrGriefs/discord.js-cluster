@@ -229,6 +229,7 @@ class ClusterManager extends EventEmitter {
    * <warn>Using this method is usually not necessary if you use the spawn method.</warn>
    * @param {number} [id=this.shards.size] Id of the shard to create
    * <info>This is usually not necessary to manually specify.</info>
+   * @param {number[]} shards List of shard ids to spawn in this cluster
    * @returns {Cluster} Note that the created shard needs to be explicitly spawned using its spawn method.
    */
   createCluster(id = this.clusters.size, shards) {
@@ -262,7 +263,7 @@ class ClusterManager extends EventEmitter {
       exec: this.file,
       args: this.clusterArgs,
       execArgv: this.execArgv,
-    })
+    });
 
     // Obtain/verify the number of shards to spawn
     if (shards === 'auto') {
@@ -339,19 +340,12 @@ class ClusterManager extends EventEmitter {
     }
 
     // Spawn the clusters
-    for (const [clusterId, shards] of Object.entries(shardChunk)) {
-      // const worker = clu.fork({
-      //   CLUSTERS: clusterId,
-      //   SHARDS: JSON.stringify(shardChunk[clusterId]),
-      //   SHARD_COUNT: this.totalShards,
-      //   CLUSTER_COUNT: this.totalClusters,
-      // });
+    for (const [clusterId, shardList] of Object.entries(shardChunk)) {
       const promises = [];
-      const cluster = this.createCluster(clusterId, shards);
+      const cluster = this.createCluster(clusterId, shardList);
       promises.push(cluster.spawn(timeout));
       if (delay > 0 && this.clusters.size !== this.clusterList.length) promises.push(Util.delayFor(delay));
-      await Promise.all(promises);
-      return this.cluster;
+      await Promise.all(promises); // eslint-disable-line no-await-in-loop
     }
 
     return this.clusters;
