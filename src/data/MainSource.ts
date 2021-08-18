@@ -6,7 +6,7 @@ const branchBlacklist = new Set(['docs', 'website', 'gh-pages']);
 export default new DocsSource({
 	id: 'main',
 	name: 'Main library',
-	global: 'Discord',
+	global: 'Cluster',
 	repo: 'MrGriefs/discord.js-cluster',
 	defaultTag: 'main',
 	branchFilter: (branch: string) => !branchBlacklist.has(branch) && !branch.startsWith('dependabot/'),
