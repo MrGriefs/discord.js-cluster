@@ -1,6 +1,6 @@
 {
   "name": "discord.js-cluster",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "A cluster manager for the Discord.js library",
   "main": "./src/index.js",
   "types": "./typings/index.d.ts",
