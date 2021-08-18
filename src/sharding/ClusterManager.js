@@ -6,7 +6,6 @@ const fs = require('fs');
 const numCPUs = require('os').cpus().length;
 const path = require('path');
 const { Collection } = require('@discordjs/collection');
-const { Client } = require('discord.js');
 const Cluster = require('./Cluster');
 const { Error, TypeError, RangeError } = require('../errors');
 const Util = require('../util/Util');
@@ -46,7 +45,8 @@ class ClusterManager extends EventEmitter {
    * @property {string|number[]} [shardList='auto'] List of shards to spawn or "auto"
    * @property {number} [guildsPerShard=1000] Amount of guilds each shard should spawn with
    * (only available when totalShards is set to 'auto')
-   * @property {ClusterManagerMode} [mode='process'] Which mode to use for shards
+   * @property {ClusterManagerMode} [mode='worker'] Which mode to use for clusters
+   * <info>Multiprocessing is only available for workers</info>
    * @property {boolean} [clusterRespawn=true] Whether clusters should automatically respawn upon exiting
    * @property {boolean} [shardRespawn=true] Whether shards should automatically respawn upon exiting
    * @property {string[]} [shardArgs=[]] Arguments to pass to the shard script when spawning
@@ -67,8 +67,7 @@ class ClusterManager extends EventEmitter {
         totalClusters: 'auto',
         totalShards: 'auto',
         guildsPerShard: 1000,
-        client: Client,
-        mode: 'process',
+        mode: 'worker',
         clusterRespawn: true,
         shardRespawn: true,
         clusterArgs: [],
@@ -216,15 +215,9 @@ class ClusterManager extends EventEmitter {
 
     /**
      * A collection of clusters that this manager has spawned
-     * @type {Collection<number, Shard>}
+     * @type {Collection<number, Cluster>}
      */
     this.clusters = new Collection();
-
-    /**
-     * The cluster this {@link ClusterManager} specifcally manages (only when {@link cluster.isPrimary})
-     * @type {Cluster|null}
-     */
-    this.cluster = null;
 
     process.env.CLUSTER_MANAGER = true;
     process.env.CLUSTER_MANAGER_MODE = this.mode;
@@ -238,10 +231,16 @@ class ClusterManager extends EventEmitter {
    * <info>This is usually not necessary to manually specify.</info>
    * @returns {Cluster} Note that the created shard needs to be explicitly spawned using its spawn method.
    */
-  createCluster() {
-    if (clu.isPrimary) throw new Error('CLUSTER_IS_PRIMARY');
-    const cl = (this.cluster = new Cluster(this));
-    return cl;
+  createCluster(id = this.clusters.size, shards) {
+    const cluster = new Cluster(this, id, shards);
+    this.clusters.set(id, cluster);
+    /**
+     * Emitted upon creating a cluster.
+     * @event ClusterManager#shardCreate
+     * @param {Cluster} cluster Cluster that was created
+     */
+    this.emit('clusterCreate', cluster);
+    return cluster;
   }
 
   /**
@@ -258,14 +257,12 @@ class ClusterManager extends EventEmitter {
    * @returns {Promise<Collection<number, Shard>>}
    */
   async spawn({ clusters = this.totalClusters, shards = this.totalShards, delay = 5500, timeout = 30000 } = {}) {
-    if (clu.isWorker) {
-      const promises = [];
-      const cluster = this.createCluster();
-      promises.push(cluster.spawn(timeout));
-      if (delay > 0 && this.clusters.size !== this.clusterList.length) promises.push(Util.delayFor(delay));
-      await Promise.all(promises);
-      return this.cluster;
-    }
+    // Modify the settings of this cluster
+    clu.setupPrimary({
+      exec: this.file,
+      args: this.clusterArgs,
+      execArgv: this.execArgv,
+    })
 
     // Obtain/verify the number of shards to spawn
     if (shards === 'auto') {
@@ -342,13 +339,19 @@ class ClusterManager extends EventEmitter {
     }
 
     // Spawn the clusters
-    for (const clusterId of this.clusterList) {
-      clu.fork({
-        CLUSTERS: clusterId,
-        SHARDS: JSON.stringify(shardChunk[clusterId]),
-        SHARD_COUNT: this.totalShards,
-        CLUSTER_COUNT: this.totalClusters,
-      });
+    for (const [clusterId, shards] of Object.entries(shardChunk)) {
+      // const worker = clu.fork({
+      //   CLUSTERS: clusterId,
+      //   SHARDS: JSON.stringify(shardChunk[clusterId]),
+      //   SHARD_COUNT: this.totalShards,
+      //   CLUSTER_COUNT: this.totalClusters,
+      // });
+      const promises = [];
+      const cluster = this.createCluster(clusterId, shards);
+      promises.push(cluster.spawn(timeout));
+      if (delay > 0 && this.clusters.size !== this.clusterList.length) promises.push(Util.delayFor(delay));
+      await Promise.all(promises);
+      return this.cluster;
     }
 
     return this.clusters;
