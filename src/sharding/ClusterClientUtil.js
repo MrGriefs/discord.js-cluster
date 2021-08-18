@@ -83,27 +83,27 @@ class ClusterClientUtil {
   }
 
   /**
-   * Fetches a client property value of each shard, or a given shard.
+   * Fetches a client property value of each cluster, or a given cluster.
    * @param {string} prop Name of the client property to get, using periods for nesting
-   * @param {number} [shard] Shard to fetch property from, all if undefined
+   * @param {number} [cluster] Cluster to fetch property from, all if undefined
    * @returns {Promise<*|Array<*>>}
    * @example
-   * client.shard.fetchClientValues('guilds.cache.size')
+   * client.cluster.fetchClientValues('guilds.cache.size')
    *   .then(results => console.log(`${results.reduce((prev, val) => prev + val, 0)} total guilds`))
    *   .catch(console.error);
-   * @see {@link ShardingManager#fetchClientValues}
+   * @see {@link ClusterManager#fetchClientValues}
    */
-  fetchClientValues(prop, shard) {
+  fetchClientValues(prop, cluster) {
     return new Promise((resolve, reject) => {
       const listener = message => {
-        if (message?._sFetchProp !== prop || message._sFetchPropShard !== shard) return;
+        if (message?._sFetchProp !== prop || message._sFetchPropShard !== cluster) return;
         process.removeListener('message', listener);
         if (!message._error) resolve(message._result);
         else reject(Util.makeError(message._error));
       };
       process.on('message', listener);
 
-      this.send({ _sFetchProp: prop, _sFetchPropShard: shard }).catch(err => {
+      this.send({ _sFetchProp: prop, _sFetchPropShard: cluster }).catch(err => {
         process.removeListener('message', listener);
         reject(err);
       });
@@ -111,15 +111,15 @@ class ClusterClientUtil {
   }
 
   /**
-   * Evaluates a script or function on all shards, or a given shard, in the context of the {@link Client}s.
-   * @param {Function} script JavaScript to run on each shard
+   * Evaluates a script or function on all clusters, or a given cluster, in the context of the {@link Client}s.
+   * @param {Function} script JavaScript to run on each cluster
    * @param {BroadcastEvalOptions} [options={}] The options for the broadcast
    * @returns {Promise<*|Array<*>>} Results of the script execution
    * @example
-   * client.shard.broadcastEval(client => client.guilds.cache.size)
+   * client.cluster.broadcastEval(client => client.guilds.cache.size)
    *   .then(results => console.log(`${results.reduce((prev, val) => prev + val, 0)} total guilds`))
    *   .catch(console.error);
-   * @see {@link ShardingManager#broadcastEval}
+   * @see {@link ClusterManager#broadcastEval}
    */
   broadcastEval(script, options = {}) {
     return new Promise((resolve, reject) => {
@@ -148,7 +148,7 @@ class ClusterClientUtil {
    * Requests a respawn of all shards.
    * @param {MultipleShardRespawnOptions} [options] Options for respawning shards
    * @returns {Promise<void>} Resolves upon the message being sent
-   * @see {@link ShardingManager#respawnAll}
+   * @see {@link ClusterManager#respawnAll}
    */
   respawnAll({ shardDelay = 5000, respawnDelay = 500, timeout = 30000 } = {}) {
     return this.send({ _sRespawnAll: { shardDelay, respawnDelay, timeout } });

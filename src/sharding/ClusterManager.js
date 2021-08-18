@@ -245,17 +245,18 @@ class ClusterManager extends EventEmitter {
   }
 
   /**
-   * Option used to spawn multiple shards.
-   * @typedef {Object} MultipleShardSpawnOptions
-   * @property {number|string} [amount=this.totalShards] Number of shards to spawn
+   * Option used to spawn multiple clusters.
+   * @typedef {Object} MultipleClusterSpawnOptions
+   * @property {number|string} [clusters=this.totalClusters] Number of clusters to spawn
+   * @property {number|string} [shards=this.totalShards] Number of shards to spawn
    * @property {number} [delay=5500] How long to wait in between spawning each shard (in milliseconds)
    * @property {number} [timeout=30000] The amount in milliseconds to wait until the {@link Client} has become ready
    */
 
   /**
-   * Spawns multiple shards.
-   * @param {MultipleShardSpawnOptions} [options] Options for spawning shards
-   * @returns {Promise<Collection<number, Shard>>}
+   * Spawns multiple clusters.
+   * @param {MultipleClusterSpawnOptions} [options] Options for spawning shards
+   * @returns {Promise<Collection<number, Cluster>>}
    */
   async spawn({ clusters = this.totalClusters, shards = this.totalShards, delay = 5500, timeout = 30000 } = {}) {
     // Modify the settings of this cluster
@@ -419,23 +420,23 @@ class ClusterManager extends EventEmitter {
 
   /**
    * Options used to respawn all shards.
-   * @typedef {Object} MultipleShardRespawnOptions
+   * @typedef {Object} MultipleClusterRespawnOptions
    * @property {number} [shardDelay=5000] How long to wait between shards (in milliseconds)
-   * @property {number} [respawnDelay=500] How long to wait between killing a shard's process and restarting it
+   * @property {number} [delay=500] How long to wait between killing a shard's process and restarting it
    * (in milliseconds)
    * @property {number} [timeout=30000] The amount in milliseconds to wait for a shard to become ready before
    * continuing to another (`-1` or `Infinity` for no wait)
    */
 
   /**
-   * Kills all running shards and respawns them.
-   * @param {MultipleShardRespawnOptions} [options] Options for respawning shards
-   * @returns {Promise<Collection<string, Shard>>}
+   * Kills all running clusters and respawns them.
+   * @param {MultipleClusterRespawnOptions} [options] Options for respawning clusters
+   * @returns {Promise<Collection<number, Cluster>>}
    */
-  async respawnAll({ shardDelay = 5000, respawnDelay = 500, timeout = 30000 } = {}) {
+  async respawnAll({ shardDelay = 5000, delay = 500, timeout = 30000 } = {}) {
     let s = 0;
     for (const cluster of this.clusters.values()) {
-      const promises = [cluster.respawn({ respawnDelay, timeout })];
+      const promises = [cluster.respawn({ delay, timeout })];
       if (++s < this.clusters.size && shardDelay > 0) promises.push(Util.delayFor(shardDelay));
       await Promise.all(promises); // eslint-disable-line no-await-in-loop
     }

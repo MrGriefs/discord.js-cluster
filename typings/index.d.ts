@@ -1,16 +1,17 @@
 import { Collection } from '@discordjs/collection';
 import { ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { Client, ClientOptions, ShardingManagerMode, Serialized, Awaited, Snowflake } from 'discord.js';
-import { MessagePort, Worker } from 'worker_threads';
+import { Client, ClientOptions, ShardingManagerMode, Serialized, Awaited, Snowflake, ShardClientUtil } from 'discord.js';
+import { Worker } from 'cluster';
 
 export class ClusterClient extends Client {
   public constructor(options: ClientOptions);
   public cluster: ClusterClientUtil | null;
+  public shard: ShardClientUtil | null;
 }
 
 export class Cluster extends EventEmitter {
-  public constructor(manager: ClusterManager, id: number);
+  public constructor(manager: ClusterManager, id: number, shards: number[]);
   private _evals: Map<string, Promise<unknown>>;
   private _exitListener: (...args: any[]) => void;
   private _fetches: Map<string, Promise<unknown>>;
@@ -53,9 +54,8 @@ export class ClusterClientUtil {
 
   public client: Client;
   public readonly count: number;
-  public readonly ids: number[];
+  public readonly id: number;
   public mode: ClusterManagerMode;
-  public parentPort: MessagePort | null;
   public broadcastEval<T>(fn: (client: Client) => Awaited<T>): Promise<Serialized<T>[]>;
   public broadcastEval<T>(fn: (client: Client) => Awaited<T>, options: { shard: number }): Promise<Serialized<T>>;
   public broadcastEval<T, P>(
@@ -67,8 +67,8 @@ export class ClusterClientUtil {
     options: { context: P; shard: number },
   ): Promise<Serialized<T>>;
   public fetchClientValues(prop: string): Promise<unknown[]>;
-  public fetchClientValues(prop: string, shard: number): Promise<unknown>;
-  public respawnAll(options?: MultipleShardRespawnOptions): Promise<void>;
+  public fetchClientValues(prop: string, cluster: number): Promise<unknown>;
+  public respawnAll(options?: MultipleClusterRespawnOptions): Promise<void>;
   public send(message: unknown): Promise<void>;
 
   public static singleton(client: Client, mode: ClusterManagerMode): ClusterClientUtil;
@@ -87,7 +87,7 @@ export class ClusterManager extends EventEmitter {
   public token: string | null;
   public totalShards: number | 'auto';
   public shardList: number[] | 'auto';
-  public broadcast(message: unknown): Promise<Shard[]>;
+  public broadcast(message: unknown): Promise<Cluster[]>;
   public broadcastEval<T>(fn: (client: Client) => Awaited<T>): Promise<Serialized<T>[]>;
   public broadcastEval<T>(fn: (client: Client) => Awaited<T>, options: { shard: number }): Promise<Serialized<T>>;
   public broadcastEval<T, P>(
@@ -101,8 +101,8 @@ export class ClusterManager extends EventEmitter {
   public createCluster(id: number): Cluster;
   public fetchClientValues(prop: string): Promise<unknown[]>;
   public fetchClientValues(prop: string, shard: number): Promise<unknown>;
-  public respawnAll(options?: MultipleShardRespawnOptions): Promise<Collection<number, Shard>>;
-  public spawn(options?: MultipleShardSpawnOptions): Promise<Collection<number, Shard>>;
+  public respawnAll(options?: MultipleClusterRespawnOptions): Promise<Collection<number, Cluster>>;
+  public spawn(options?: MultipleClusterSpawnOptions): Promise<Collection<number, Cluster>>;
 
   public on(event: 'clusterCreate', listener: (cluster: Cluster) => Awaited<void>): this;
 
@@ -110,15 +110,30 @@ export class ClusterManager extends EventEmitter {
 }
 
 export interface ClusterManagerOptions {
-  totalShards?: number | 'auto';
-  shardList?: number[] | 'auto';
   totalClusters?: number | 'auto';
+  totalShards?: number | 'auto';
   clusterList?: number[] | 'auto';
+  shardList?: number[] | 'auto';
+  guildsPerShard?: number;
   mode?: ShardingManagerMode;
-  respawn?: boolean;
+  clusterRespawn?: boolean;
+  shardRespawn?: boolean;
   shardArgs?: string[];
   token?: string;
   execArgv?: string[];
 }
 
 export type ClusterManagerMode = ShardingManagerMode;
+
+export interface MultipleClusterRespawnOptions {
+  clusterDelay?: number;
+  respawnDelay?: number;
+  timeout?: number;
+}
+
+export interface MultipleClusterSpawnOptions {
+  clusters?: number | 'auto';
+  shards?: number | 'auto';
+  delay?: number;
+  timeout?: number;
+}
