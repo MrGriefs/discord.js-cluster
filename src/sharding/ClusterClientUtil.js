@@ -28,36 +28,16 @@ class ClusterClientUtil {
      */
     this.mode = mode;
 
-    /**
-     * Message port for the master process (only when {@link ClusterClientUtil#mode} is `worker`)
-     * @type {?MessagePort}
-     */
-    this.parentPort = null;
-
-    if (mode === 'process') {
-      process.on('message', this._handleMessage.bind(this));
-      client.on('ready', () => {
-        process.send({ _ready: true });
-      });
-      client.on('disconnect', () => {
-        process.send({ _disconnect: true });
-      });
-      client.on('reconnecting', () => {
-        process.send({ _reconnecting: true });
-      });
-    } else if (mode === 'worker') {
-      this.parentPort = require('worker_threads').parentPort;
-      this.parentPort.on('message', this._handleMessage.bind(this));
-      client.on('ready', () => {
-        this.parentPort.postMessage({ _ready: true });
-      });
-      client.on('disconnect', () => {
-        this.parentPort.postMessage({ _disconnect: true });
-      });
-      client.on('reconnecting', () => {
-        this.parentPort.postMessage({ _reconnecting: true });
-      });
-    }
+    process.on('message', this._handleMessage.bind(this));
+    client.on('ready', () => {
+      process.send({ _ready: true });
+    });
+    client.on('disconnect', () => {
+      process.send({ _disconnect: true });
+    });
+    client.on('reconnecting', () => {
+      process.send({ _reconnecting: true });
+    });
   }
 
   /**
@@ -95,15 +75,10 @@ class ClusterClientUtil {
    */
   send(message) {
     return new Promise((resolve, reject) => {
-      if (this.mode === 'process') {
-        process.send(message, err => {
-          if (err) reject(err);
-          else resolve();
-        });
-      } else if (this.mode === 'worker') {
-        this.parentPort.postMessage(message);
-        resolve();
-      }
+      process.send(message, err => {
+        if (err) reject(err);
+        else resolve();
+      });
     });
   }
 
@@ -120,18 +95,16 @@ class ClusterClientUtil {
    */
   fetchClientValues(prop, shard) {
     return new Promise((resolve, reject) => {
-      const parent = this.parentPort ?? process;
-
       const listener = message => {
         if (message?._sFetchProp !== prop || message._sFetchPropShard !== shard) return;
-        parent.removeListener('message', listener);
+        process.removeListener('message', listener);
         if (!message._error) resolve(message._result);
         else reject(Util.makeError(message._error));
       };
-      parent.on('message', listener);
+      process.on('message', listener);
 
       this.send({ _sFetchProp: prop, _sFetchPropShard: shard }).catch(err => {
-        parent.removeListener('message', listener);
+        process.removeListener('message', listener);
         reject(err);
       });
     });
@@ -150,7 +123,6 @@ class ClusterClientUtil {
    */
   broadcastEval(script, options = {}) {
     return new Promise((resolve, reject) => {
-      const parent = this.parentPort ?? process;
       if (typeof script !== 'function') {
         reject(new TypeError('CLUSTER_INVALID_EVAL_BROADCAST'));
         return;
@@ -159,14 +131,14 @@ class ClusterClientUtil {
 
       const listener = message => {
         if (message?._sEval !== script || message._sEvalShard !== options.shard) return;
-        parent.removeListener('message', listener);
+        process.removeListener('message', listener);
         if (!message._error) resolve(message._result);
         else reject(Util.makeError(message._error));
       };
-      parent.on('message', listener);
+      process.on('message', listener);
 
       this.send({ _sEval: script, _sEvalShard: options.shard }).catch(err => {
-        parent.removeListener('message', listener);
+        process.removeListener('message', listener);
         reject(err);
       });
     });

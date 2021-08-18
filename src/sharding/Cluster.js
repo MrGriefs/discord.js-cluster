@@ -5,7 +5,7 @@ const path = require('path');
 const { Util } = require('discord.js');
 const { Error } = require('../errors');
 let childProcess = null;
-let Worker = null;
+let worker = null;
 
 /**
  * A self-contained shard created by the {@link ClusterManager}. Each one has a {@link ChildProcess} that contains
@@ -23,7 +23,7 @@ class Cluster extends EventEmitter {
     super();
 
     if (manager.mode === 'process') childProcess = require('child_process');
-    else if (manager.mode === 'worker') Worker = require('worker_threads').Worker;
+    else if (manager.mode === 'worker') worker = require('cluster');
 
     /**
      * Manager that created the shard
@@ -128,9 +128,7 @@ class Cluster extends EventEmitter {
         .on('message', this._handleMessage.bind(this))
         .on('exit', this._exitListener);
     } else if (this.manager.mode === 'worker') {
-      this.worker = new Worker(path.resolve(this.manager.file), { workerData: this.env })
-        .on('message', this._handleMessage.bind(this))
-        .on('exit', this._exitListener);
+      this.worker = worker.fork(this.env).on('message', this._handleMessage.bind(this)).on('exit', this._exitListener);
     }
 
     this._evals.clear();
@@ -185,13 +183,9 @@ class Cluster extends EventEmitter {
    * Immediately kills the cluster's process/worker and does not restart it.
    */
   kill() {
-    if (this.process) {
-      this.process.removeListener('exit', this._exitListener);
-      this.process.kill();
-    } else {
-      this.worker.removeListener('exit', this._exitListener);
-      this.worker.terminate();
-    }
+    const child = this.process ?? this.worker;
+    child.removeListener('exit', this._exitListener);
+    child.kill();
 
     this._handleExit(false);
   }
@@ -222,16 +216,12 @@ class Cluster extends EventEmitter {
    * @returns {Promise<Cluster>}
    */
   send(message) {
+    const child = this.process ?? this.worker;
     return new Promise((resolve, reject) => {
-      if (this.process) {
-        this.process.send(message, err => {
-          if (err) reject(err);
-          else resolve(this);
-        });
-      } else {
-        this.worker.postMessage(message);
-        resolve(this);
-      }
+      child.send(message, err => {
+        if (err) reject(err);
+        else resolve(this);
+      });
     });
   }
 
