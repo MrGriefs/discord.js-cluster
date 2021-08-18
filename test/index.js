@@ -9,5 +9,5 @@ let manager = new ClusterManager(path.join(__dirname, 'main.js'), {
 
 manager.spawn().then(() => {
     // ClusterManager has spawned all clusters
-    setTimeout(() => process.exit(), 5 * 60 * 1000)
+    setTimeout(() => process.exit(), .5 * 60 * 1000)
 });
