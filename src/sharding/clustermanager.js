@@ -1,539 +1,438 @@
-const master = require("cluster");
-const cluster = require("./cluster.js");
-const numCPUs = require('os').cpus().length;
-const logger = require("../utils/logger.js");
-const EventEmitter = require("events");
-const Discord = require("discord.js");
-const Queue = require("../utils/queue.js");
-const pkg = require("../../package.json");
+'use strict';
+
+const clu = require('cluster');
+const EventEmitter = require('events');
+const fs = require('fs');
+const path = require('path');
+const { Collection } = require('@discordjs/collection');
+const { Client } = require('discord.js');
+const Cluster = require('./Cluster');
+const { Error, TypeError, RangeError } = require('../errors');
+const Util = require('../util/Util');
 
 /**
- * 
- * 
- * @class ClusterManager
+ * This is a utility class that makes multi-process sharding of a bot an easy and painless experience.
+ * It works by spawning a self-contained {@link ChildProcess} or {@link Worker} for each individual shard, each
+ * containing its own instance of your bot's {@link Client}. They all have a line of communication with the master
+ * process, and there are several useful methods that utilise it in order to simplify tasks that are normally difficult
+ * with sharding. It can spawn a specific number of shards or the amount that Discord suggests for the bot, and takes a
+ * path to your main bot script to launch for each one.
  * @extends {EventEmitter}
  */
 class ClusterManager extends EventEmitter {
+  /**
+   * The mode to spawn shards with for a {@link ClusterManager}. Can be either one of:
+   * * 'process' to use child processes
+   * * 'worker' to use [Worker threads](https://nodejs.org/api/worker_threads.html)
+   * @typedef {string} ClusterManagerMode
+   */
+
+  /**
+   * The options to spawn shards with for a {@link ClusterManager}.
+   * @typedef {Object} ShardingManagerOptions
+   * @property {string|number} [totalClusters='auto'] Number of total clusters of all cluster managers or "auto"
+   * @property {string|number} [totalShards='auto'] Number of total shards of all cluster managers or "auto"
+   * @property {string|number[]} [clusterList='auto'] List of clusters to spawn or "auto"
+   * @property {string|number[]} [shardList='auto'] List of shards to spawn or "auto"
+   * @property {number} [guildsPerShard=1000] Amount of guilds each shard should spawn with
+   * (only available when totalShards is set to 'auto')
+   * @property {ClusterManagerMode} [mode='process'] Which mode to use for shards
+   * @property {boolean} [clusterRespawn=true] Whether clusters should automatically respawn upon exiting
+   * @property {boolean} [shardRespawn=true] Whether shards should automatically respawn upon exiting
+   * @property {string[]} [shardArgs=[]] Arguments to pass to the shard script when spawning
+   * (only available when mode is set to 'process')
+   * @property {string} [execArgv=[]] Arguments to pass to the shard script executable when spawning
+   * (only available when mode is set to 'process')
+   * @property {string} [token] Token to use for automatic shard count and passing to shards
+   */
+
+  /**
+   * @param {string} file Path to your shard script file
+   * @param {ShardingManagerOptions} [options] Options for the sharding manager
+   */
+  constructor(file, options = {}) {
+    super();
+    options = Util.mergeDefault(
+      {
+        totalClusters: 'auto',
+        totalShards: 'auto',
+        guildsPerShard: 1000,
+        client: Client,
+        mode: 'process',
+        clusterRespawn: true,
+        shardRespawn: true,
+        clusterArgs: [],
+        shardArgs: [],
+        execArgv: [],
+        token: process.env.DISCORD_TOKEN,
+      },
+      options,
+    );
+
     /**
-     * Creates an instance of ClusterManager.
-     * @param {any} token 
-     * @param {any} mainFile 
-     * @param {any} options 
-     * @memberof ClusterManager
+     * Path to the shard script file
+     * @type {string}
      */
-    constructor(token, mainFile, options) {
-        super();
+    this.file = file;
+    if (!file) throw new Error('CLIENT_INVALID_OPTION', 'File', 'specified.');
+    if (!path.isAbsolute(file)) this.file = path.resolve(process.cwd(), file);
+    const stats = fs.statSync(this.file);
+    if (!stats.isFile()) throw new Error('CLIENT_INVALID_OPTION', 'File', 'a file');
 
-        this.shardCount = options.shards || 'auto';
-        this.firstShardID = options.firstShardID || 0;
-        this.lastShardID = options.lastShardID || 0;
-        this.clusterCount = options.clusters || numCPUs;
-        this.clusterTimeout = options.clusterTimeout * 1000 || 5000;
-        this.test = options.test || false;
-        this.client = options.client || Discord.Client;
-
-        this.token = token || false;
-
-        this.clusters = new Map();
-        this.workers = new Map();
-        this.queue = new Queue();
-        this.callbacks = new Map();
-
-        this.options = {
-            stats: options.stats || false,
-            debug: options.debug || false
-        };
-
-        this.statsInterval = options.statsInterval || 60 * 1000;
-        this.mainFile = mainFile;
-        this.name = options.name || "DiscordJS-Sharder";
-        this.guildsPerShard = options.guildsPerShard || 1300;
-
-        this.webhooks = Object.assign({
-            cluster: undefined,
-            shard: undefined
-        }, options.webhooks);
-
-
-        this.clientOptions = options.clientOptions || {};
-
-
-        if (options.stats === true) {
-            this.stats = {
-                stats: {
-                    guilds: 0,
-                    users: 0,
-                    totalRam: 0,
-                    channels: 0,
-                    exclusiveGuilds: 0,
-                    largeGuilds: 0,
-                    clusters: []
-                },
-                clustersCounted: 0
-            }
-        }
-
-        if (this.token) {
-            this.launch(false);
-        } else {
-            throw new Error("No token provided");
-        }
-    }
-
-    isMaster() {
-        return master.isMaster;
-    }
-
-    startStats() {
-        if (this.statsInterval != null) {
-            setInterval(() => {
-                this.stats.stats.guilds = 0;
-                this.stats.stats.users = 0;
-                this.stats.stats.totalRam = 0;
-                this.stats.stats.clusters = [];
-                this.stats.stats.channels = 0;
-                this.stats.stats.exclusiveGuilds = 0;
-                this.stats.stats.largeGuilds = 0;
-                this.stats.clustersCounted = 0;
-
-                let clusters = Object.entries(master.workers);
-
-                this.executeStats(clusters, 0);
-            }, this.statsInterval);
-        }
+    /**
+     * List of clusters this cluster manager spawns
+     * @type {string|number[]}
+     */
+    this.clusterList = options.clusterList ?? 'auto';
+    if (this.clusterList !== 'auto') {
+      if (!Array.isArray(this.clusterList)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'clusterList', 'an array.');
+      }
+      this.clusterList = [...new Set(this.clusterList)];
+      if (this.clusterList.length < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'clusterList', 'at least 1 id.');
+      if (
+        this.clusterList.some(
+          clusterId =>
+            typeof clusterId !== 'number' || isNaN(clusterId) || !Number.isInteger(clusterId) || clusterId < 0,
+        )
+      ) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'clusterList', 'an array of positive integers.');
+      }
     }
 
     /**
-     * 
-     * 
-     * @param {any} start 
-     * @memberof ClusterManager
+     * Amount of clusters that all cluster managers spawn in total
+     * @type {number}
      */
-    executeStats(clusters, start) {
-        const clusterToRequest = clusters.filter(c => c[1].isConnected())[start];
-        if (clusterToRequest) {
-            let c = clusterToRequest[1];
-
-            c.send({ name: "stats" });
-
-            this.executeStats(clusters, start + 1);
-        }
-    }
-
-
-    /**
-     * 
-     * 
-     * @param {any} clusterID 
-     * @memberof ClusterManager
-     */
-    start(clusterID) {
-        if (clusterID === this.clusterCount) {
-            logger.info("Cluster Manager", "Clusters have been launched!");
-
-            let shards = [];
-
-            for (let i = this.firstShardID; i <= this.lastShardID; i++) {
-                shards.push(i);
-            }
-
-            let chunkedShards = this.chunk(shards, this.clusterCount);
-
-            chunkedShards.forEach((chunk, clusterID) => {
-                let cluster = this.clusters.get(clusterID);
-
-                this.clusters.set(clusterID, Object.assign(cluster, {
-                    firstShardID: Math.min(...chunk),
-                    lastShardID: Math.max(...chunk)
-                }));
-            });
-
-            this.connectShards();
-        } else {
-            let worker = master.fork({ SHARDING_MANAGER: true });
-            this.clusters.set(clusterID, { workerID: worker.id });
-            this.workers.set(worker.id, clusterID);
-            logger.info("Cluster Manager", `Launching cluster ${clusterID}`);
-            clusterID += 1;
-
-            this.start(clusterID);
-        }
+    this.totalClusters = options.totalClusters || 'auto';
+    if (this.totalClusters !== 'auto') {
+      if (typeof this.totalClusters !== 'number' || isNaN(this.totalClusters)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'a number.');
+      }
+      if (this.totalClusters < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'at least 1.');
+      if (!Number.isInteger(this.totalClusters)) {
+        throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'an integer.');
+      }
     }
 
     /**
-     * 
-     * 
-     * @memberof ClusterManager
+     * List of shards this sharding manager spawns
+     * @type {string|number[]}
      */
-    launch(test) {
-        if (master.isMaster) {
-            process.on("uncaughtException", err => {
-                logger.error("Cluster Manager", err.stack);
-            });
-
-            this.printLogo();
-
-            process.nextTick(async () => {
-                logger.info("General", "Cluster Manager has started!");
-
-                let shards = await this.calculateShards();
-
-                this.shardCount = shards;
-
-                if (this.lastShardID === 0) this.lastShardID = this.shardCount - 1;
-
-                logger.info("Cluster Manager", `Starting ${this.shardCount} shards in ${this.clusterCount} clusters`);
-
-                let embed = {
-                    title: `Starting ${this.shardCount} shards in ${this.clusterCount} clusters`
-                }
-
-                this.sendWebhook("cluster", embed);
-
-                master.setupMaster({
-                    silent: false
-                });
-
-                // Fork workers.
-                this.start(0);
-            });
-        } else if (master.isWorker) {
-            const Cluster = new cluster(this.client, { debug: this.options.debug });
-            Cluster.spawn();
-        }
-
-        master.on('message', async (worker, message, handle) => {
-            if (message.name) {
-                const clusterID = this.workers.get(worker.id);
-
-                switch (message.name) {
-                    case "log":
-                        logger.log(`Cluster ${clusterID}`, `${message.msg}`);
-                        break;
-                    case "debug":
-                        if (this.options.debug) {
-                            logger.debug(`Cluster ${clusterID}`, `${message.msg}`);
-                        }
-                        break;
-                    case "info":
-                        logger.info(`Cluster ${clusterID}`, `${message.msg}`);
-                        break;
-                    case "warn":
-                        logger.warn(`Cluster ${clusterID}`, `${message.msg}`);
-                        break;
-                    case "error":
-                        logger.error(`Cluster ${clusterID}`, `${message.msg}`);
-                        break;
-                    case "shardsStarted":
-                        this.queue.queue.splice(0, 1);
-
-                        if (this.queue.queue.length > 0) {
-                            setTimeout(() => this.queue.executeQueue(), this.clusterTimeout);
-                        }
-                        break;
-                    case "cluster":
-                        this.sendWebhook("cluster", message.embed);
-                        break;
-                    case "shard":
-                        this.sendWebhook("shard", message.embed);
-                        break;
-                    case "stats":
-                        this.stats.stats.guilds += message.stats.guilds;
-                        this.stats.stats.users += message.stats.users;
-                        this.stats.stats.channels += message.stats.channels;
-                        this.stats.stats.totalRam += message.stats.ram;
-                        let ram = message.stats.ram / 1000000;
-                        this.stats.stats.exclusiveGuilds += message.stats.exclusiveGuilds;
-                        this.stats.stats.largeGuilds += message.stats.largeGuilds;
-                        this.stats.stats.clusters.push({
-                            cluster: clusterID,
-                            shards: message.stats.shards,
-                            guilds: message.stats.guilds,
-                            ram: ram,
-                            channels: message.stats.channels,
-                            uptime: message.stats.uptime,
-                            exclusiveGuilds: message.stats.exclusiveGuilds,
-                            largeGuilds: message.stats.largeGuilds,
-                            shardsStats: message.stats.shardsStats
-                        });
-
-                        this.stats.clustersCounted += 1;
-
-                        if (this.stats.clustersCounted === this.clusters.size) {
-                            function compare(a, b) {
-                                if (a.cluster < b.cluster)
-                                    return -1;
-                                if (a.cluster > b.cluster)
-                                    return 1;
-                                return 0;
-                            }
-
-                            let clusters = this.stats.stats.clusters.sort(compare);
-
-                            this.emit("stats", {
-                                guilds: this.stats.stats.guilds,
-                                users: this.stats.stats.users,
-                                channels: this.stats.stats.channels,
-                                exclusiveGuilds: this.stats.stats.exclusiveGuilds,
-                                largeGuilds: this.stats.stats.largeGuilds,
-                                totalRam: this.stats.stats.totalRam / 1000000,
-                                clusters: clusters
-                            });
-                        }
-                        break;
-
-                    case "fetchUser":
-                        this.fetchInfo(0, "fetchUser", message.id);
-                        this.callbacks.set(message.id, clusterID);
-                        break;
-                    case "fetchGuild":
-                        this.fetchInfo(0, "fetchGuild", message.id);
-                        this.callbacks.set(message.id, clusterID);
-                        break;
-                    case "fetchChannel":
-                        this.fetchInfo(0, "fetchChannel", message.id);
-                        this.callbacks.set(message.id, clusterID);
-                        break;
-                    case "fetchMember":
-                        this.fetchInfo(0, "fetchMember", [message.guildID, message.memberID]);
-                        this.callbacks.set(message.memberID, clusterID);
-                        break;
-                    case "fetchReturn":
-                        let callback = this.callbacks.get(message.value.id);
-
-                        let cluster = this.clusters.get(callback);
-
-                        if (cluster) {
-                            master.workers[cluster.workerID].send({ name: "fetchReturn", id: message.value.id, value: message.value });
-                            this.callbacks.delete(message.value.id);
-                        }
-                        break;
-                    case "broadcast":
-                        this.broadcast(message.msg, message.msg.clusterId);
-                        break;
-                    case "send":
-                        this.sendTo(message.cluster, message.msg)
-                        break;
-                    case "apiRequest":
-                        let response;
-                        let error;
-
-                        let { method, url, auth, body, file, _route } = message;
-
-                        if (file && file.file) file.file = Buffer.from(file.file, 'base64');
-
-                        try {
-                            // @ts-ignore - private variable my ass
-                            response = this.bot.rest.request(method, url, {
-                                auth,
-                                route: _route,
-                                files: [ file ],
-                                data: body,
-                            })
-                        } catch (err) {
-                            error = {
-                                code: err.code,
-                                message: err.message,
-                                stack: err.stack
-                            };
-                        }
-
-                        if (error) {
-                            this.sendTo(clusterID, { _eventName: `apiResponse.${message.requestID}`, err: error })
-                        } else {
-                            this.sendTo(clusterID, { _eventName: `apiResponse.${message.requestID}`, data: response });
-                        }
-
-                        break;
-                }
-            }
-        });
-
-        master.on('disconnect', (worker) => {
-            const clusterID = this.workers.get(worker.id);
-            logger.warn("Cluster Manager", `cluster ${clusterID} disconnected`);
-        });
-
-        master.on('exit', (worker, code, signal) => {
-            this.restartCluster(worker, code, signal);
-        });
-
-        this.queue.on("execute", item => {
-            let cluster = this.clusters.get(item.item);
-
-            if (cluster) {
-                master.workers[cluster.workerID].send(item.value);
-            }
-        });
-    }
-
-    chunk(shards, clusterCount) {
-
-        if (clusterCount < 2) return [shards];
-
-        let len = shards.length;
-        let out = [];
-        let i = 0;
-        let size;
-
-        if (len % clusterCount === 0) {
-            size = Math.floor(len / clusterCount);
-
-            while (i < len) {
-                out.push(shards.slice(i, i += size));
-            }
-        } else {
-            while (i < len) {
-                size = Math.ceil((len - i) / clusterCount--);
-                out.push(shards.slice(i, i += size));
-            }
-        }
-
-        return out;
-    }
-
-    connectShards() {
-        for (let clusterID in [...Array(this.clusterCount).keys()]) {
-            // @ts-ignore
-            clusterID = parseInt(clusterID);
-
-            let cluster = this.clusters.get(clusterID);
-
-            if (!cluster.hasOwnProperty('firstShardID')) break;
-
-            this.queue.queueItem({
-                item: clusterID,
-                value: {
-                    id: clusterID,
-                    clusterCount: this.clusterCount,
-                    name: "connect",
-                    firstShardID: cluster.firstShardID,
-                    lastShardID: cluster.lastShardID,
-                    maxShards: this.shardCount,
-                    token: this.token,
-                    file: this.mainFile,
-                    clientOptions: this.clientOptions,
-                }
-            });
-        }
-
-        logger.info("Cluster Manager", `All shards spread`);
-
-        if (this.stats) {
-            this.startStats();
-        }
+    this.shardList = options.shardList ?? 'auto';
+    if (this.shardList !== 'auto') {
+      if (!Array.isArray(this.shardList)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'shardList', 'an array.');
+      }
+      this.shardList = [...new Set(this.shardList)];
+      if (this.shardList.length < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'shardList', 'at least 1 id.');
+      if (
+        this.shardList.some(
+          shardId => typeof shardId !== 'number' || isNaN(shardId) || !Number.isInteger(shardId) || shardId < 0,
+        )
+      ) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'shardList', 'an array of positive integers.');
+      }
     }
 
     /**
-     * 
-     * 
-     * @param {any} type 
-     * @param {any} embed 
-     * @memberof ClusterManager
+     * Amount of shards that all sharding managers spawn in total
+     * @type {number}
      */
-    sendWebhook(type, embed) {
-        if (!this.webhooks || !this.webhooks[type]) return;
-        let id = this.webhooks[type].id;
-        let token = this.webhooks[type].token;
-        embed.timestamp = new Date();
-        if (id && token) {
-            new Discord.WebhookClient(id, token).send({ embeds: [embed] })
-        }
+    this.totalShards = options.totalShards || 'auto';
+    if (this.totalShards !== 'auto') {
+      if (typeof this.totalShards !== 'number' || isNaN(this.totalShards)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'a number.');
+      }
+      if (this.totalShards < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'at least 1.');
+      if (!Number.isInteger(this.totalShards)) {
+        throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'an integer.');
+      }
     }
 
-    printLogo() {
-        const logo = require('asciiart-logo');
-        console.log(
-            logo({
-                name: this.name,
-                font: 'Big',
-                lineChars: 15,
-                padding: 5,
-                margin: 2
-            })
-                .emptyLine()
-                .right(`discord.js-cluster ${pkg.version}`)
-                .emptyLine()
-                .render()
-        );
+    /**
+     * Amount of guilds each shard should spawn with
+     * @type {number}
+     */
+    this.guildsPerShard = options.guildsPerShard || 1000;
+    if (typeof this.guildsPerShard !== 'number' || isNaN(this.guildsPerShard)) {
+      throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of guilds per shard', 'a number.');
     }
 
-    restartCluster(worker, code, signal) {
-        const clusterID = this.workers.get(worker.id);
-
-        logger.warn("Cluster Manager", `cluster ${clusterID} died`);
-
-        let cluster = this.clusters.get(clusterID);
-
-        let embed = {
-            title: `Cluster ${clusterID} died with code ${code}. Restarting...`,
-            description: `Shards ${cluster.firstShardID} - ${cluster.lastShardID}`
-        }
-
-        this.sendWebhook("cluster", embed);
-
-        let shards = cluster.shardCount;
-
-        let newWorker = master.fork({ SHARDING_MANAGER: true });
-
-        this.workers.delete(worker.id);
-
-        this.clusters.set(clusterID, Object.assign(cluster, { workerID: newWorker.id }));
-
-        this.workers.set(newWorker.id, clusterID);
-
-        logger.debug("Cluster Manager", `Restarting cluster ${clusterID}`);
-
-        this.queue.queueItem({
-            item: clusterID, value: {
-                id: clusterID,
-                clusterCount: this.clusterCount,
-                name: "connect",
-                shards: shards,
-                firstShardID: cluster.firstShardID,
-                lastShardID: cluster.lastShardID,
-                maxShards: this.shardCount,
-                token: this.token,
-                file: this.mainFile,
-                clientOptions: this.clientOptions,
-                test: this.test
-            }
-        });
+    /**
+     * Mode for shards to spawn with
+     * @type {ClusterManagerMode}
+     */
+    this.mode = options.mode;
+    if (this.mode !== 'process' && this.mode !== 'worker') {
+      throw new RangeError('CLIENT_INVALID_OPTION', 'Cluster mode', '"process" or "worker"');
     }
 
-    async calculateShards() {
-        const shards = await Discord.Util.fetchRecommendedShards(this.token, { guildsPerShard: 1000 });
+    /**
+     * Whether clusters should automatically respawn upon exiting
+     * @type {boolean}
+     */
+    this.clusterRespawn = options.clusterRespawn;
 
-        if (shards === 1) {
-            return Promise.resolve(shards);
-        } else {
-            let guildCount = shards * 1000;
-            let shardsDecimal = guildCount / this.guildsPerShard;
-            let finalShards = Math.ceil(shardsDecimal);
-            return Promise.resolve(finalShards);
-        }
+    /**
+     * Whether shards should automatically respawn upon exiting
+     * @type {boolean}
+     */
+    this.shardRespawn = options.shardRespawn;
+
+    /**
+     * An array of arguments to pass to clusters (only when {@link ClusterManager#mode} is `process`)
+     * @type {string[]}
+     */
+    this.clusterArgs = options.clusterArgs;
+
+    /**
+     * An array of arguments to pass to shards (only when {@link ClusterManager#mode} is `process`)
+     * @type {string[]}
+     */
+    this.shardArgs = options.shardArgs;
+
+    /**
+     * An array of arguments to pass to the executable (only when {@link ClusterManager#mode} is `process`)
+     * @type {string[]}
+     */
+    this.execArgv = options.execArgv;
+
+    /**
+     * Token to use for obtaining the automatic shard count, and passing to clusters
+     * @type {?string}
+     */
+    this.token = options.token?.replace(/^Bot\s*/i, '') ?? null;
+
+    /**
+     * A collection of clusters that this manager has spawned
+     * @type {Collection<number, Shard>}
+     */
+    this.clusters = new Collection();
+
+    /**
+     * The cluster this {@link ClusterManager} specifcally manages (only when {@link cluster.isPrimary})
+     * @type {Cluster|null}
+     */
+    this.cluster = null;
+
+    process.env.CLUSTER_MANAGER = true;
+    process.env.CLUSTER_MANAGER_MODE = this.mode;
+    process.env.DISCORD_TOKEN = this.token;
+  }
+
+  /**
+   * Creates a single shard.
+   * <warn>Using this method is usually not necessary if you use the spawn method.</warn>
+   * @param {number} [id=this.shards.size] Id of the shard to create
+   * <info>This is usually not necessary to manually specify.</info>
+   * @returns {Cluster} Note that the created shard needs to be explicitly spawned using its spawn method.
+   */
+  createCluster() {
+    if (clu.isPrimary) throw new Error('CLUSTER_IS_PRIMARY');
+    const cl = (this.cluster = new Cluster(this));
+    /**
+     * Emitted upon creating a shard.
+     * @event ClusterManager#clusterCreate
+     * @param {Cluster} cluster Cluster that was created
+     */
+    this.emit('clusterCreate', cl);
+    return cl;
+  }
+
+  /**
+   * Option used to spawn multiple shards.
+   * @typedef {Object} MultipleShardSpawnOptions
+   * @property {number|string} [amount=this.totalShards] Number of shards to spawn
+   * @property {number} [delay=5500] How long to wait in between spawning each shard (in milliseconds)
+   * @property {number} [timeout=30000] The amount in milliseconds to wait until the {@link Client} has become ready
+   */
+
+  /**
+   * Spawns multiple shards.
+   * @param {MultipleShardSpawnOptions} [options] Options for spawning shards
+   * @returns {Promise<Collection<number, Shard>>}
+   */
+  async spawn({ clusters = this.totalClusters, shards = this.totalShards, delay = 5500, timeout = 30000 } = {}) {
+    if (clu.isWorker) {
+      const promises = [];
+      const cluster = this.createCluster();
+      promises.push(cluster.spawn(timeout));
+      if (delay > 0 && this.clusters.size !== this.clusterList.length) promises.push(Util.delayFor(delay));
+      await Promise.all(promises);
+      return this.cluster;
     }
 
-    fetchInfo(start, type, value) {
-        let cluster = this.clusters.get(start);
-        if (cluster) {
-            master.workers[cluster.workerID].send({ name: type, value: value });
-            this.fetchInfo(start + 1, type, value);
-        }
+    // Obtain/verify the number of shards to spawn
+    if (shards === 'auto') {
+      shards = await Util.fetchRecommendedShards(this.token, { guildsPerShard: this.guildsPerShard });
+    } else {
+      if (typeof shards !== 'number' || isNaN(shards)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'a number.');
+      }
+      if (shards < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'at least 1.');
+      if (!Number.isInteger(shards)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of shards', 'an integer.');
+      }
     }
 
-    broadcast(message, clusterId = -1) {
-        if (clusterId == Infinity || clusterId < 0) return [...this.clusters.keys()].forEach(id => this.broadcast(message, id));
-        let cluster = this.clusters.get(clusterId);
-        if (cluster) master.workers[cluster.workerID].send(message);
+    // Make sure this many shards haven't already been spawned
+    const shardSize = this.clusters.reduce(cluster => cluster.shards.length, 0);
+    if (shardSize >= shards) throw new Error('SHARDING_ALREADY_SPAWNED', shards);
+    if (this.shardList === 'auto' || this.totalShards === 'auto' || this.totalShards !== shards) {
+      this.shardList = [...Array(shards).keys()];
+    }
+    if (this.totalShards === 'auto' || this.totalShards !== shards) {
+      this.totalShards = shards;
     }
 
-    sendTo(cluster, message) {
-        let worker = master.workers[this.clusters.get(cluster).workerID];
-        if (worker) {
-            worker.send(message);
-        }
+    if (this.shardList.some(shardId => shardId >= shards)) {
+      throw new RangeError(
+        'CLIENT_INVALID_OPTION',
+        'Amount of shards',
+        'bigger than the highest shardId in the shardList option.',
+      );
     }
+
+    // Obtain/verify the number of clusters to spawn
+    if (clusters === 'auto') {
+      clusters = require('os').cpus().length;
+    } else {
+      if (typeof clusters !== 'number' || isNaN(clusters)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'a number.');
+      }
+      if (clusters < 1) throw new RangeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'at least 1.');
+      if (!Number.isInteger(clusters)) {
+        throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'an integer.');
+      }
+    }
+
+    // Split the list of shards into chunks and ensure this many clusters are needed
+    const shardChunk = Util.chunk(this.shardList, clusters);
+    if (clusters > shardChunk.length) {
+      clusters = shardChunk.length;
+    }
+
+    // Make sure this many clusters haven't already been spawned
+    if (this.clusters.size >= clusters) throw new Error('CLUSTER_ALREADY_SPAWNED', this.clusters.size);
+    if (this.clusterList === 'auto' || this.totalClusters === 'auto' || this.totalClusters !== clusters) {
+      this.clusterList = [...Array(clusters).keys()];
+    }
+    if (this.totalClusters === 'auto' || this.totalClusters !== clusters) {
+      this.totalClusters = clusters;
+    }
+
+    if (this.clusterList.some(clusterId => clusterId >= clusters)) {
+      throw new RangeError(
+        'CLIENT_INVALID_OPTION',
+        'Amount of clusters',
+        'bigger than the highest clusterId in the clusterList option.',
+      );
+    }
+
+    // Spawn the clusters
+    for (const clusterId of this.clusterList) {
+      clu.fork({
+        CLUSTERS: clusterId,
+        SHARDS: JSON.stringify(shardChunk[clusterId]),
+        SHARD_COUNT: this.totalShards,
+        CLUSTER_COUNT: this.totalClusters,
+      });
+    }
+
+    return this.clusters;
+  }
+
+  /**
+   * Sends a message to all shards.
+   * @param {*} message Message to be sent to the shards
+   * @returns {Promise<Shard[]>}
+   */
+  broadcast(message) {
+    const promises = [];
+    for (const cluster of this.clusters.values()) promises.push(cluster.send(message));
+    return Promise.all(promises);
+  }
+
+  /**
+   * Options for {@link ClusterManager#broadcastEval} and {@link ShardClientUtil#broadcastEval}.
+   * @typedef {Object} BroadcastEvalOptions
+   * @property {number} [cluster] Shard to run script on, all if undefined
+   * @property {*} [context] The JSON-serializable values to call the script with
+   */
+
+  /**
+   * Evaluates a script on all shards, or a given shard, in the context of the {@link Client}s.
+   * @param {Function} script JavaScript to run on each shard
+   * @param {BroadcastEvalOptions} [options={}] The options for the broadcast
+   * @returns {Promise<*|Array<*>>} Results of the script execution
+   */
+  broadcastEval(script, options = {}) {
+    if (typeof script !== 'function') return Promise.reject(new TypeError('CLUSTER_INVALID_EVAL_BROADCAST'));
+    return this._performOnClusters('eval', [`(${script})(this, ${JSON.stringify(options.context)})`], options.cluster);
+  }
+
+  /**
+   * Fetches a client property value of each shard, or a given shard.
+   * @param {string} prop Name of the client property to get, using periods for nesting
+   * @param {number} [cluster] Shard to fetch property from, all if undefined
+   * @returns {Promise<*|Array<*>>}
+   * @example
+   * manager.fetchClientValues('guilds.cache.size')
+   *   .then(results => console.log(`${results.reduce((prev, val) => prev + val, 0)} total guilds`))
+   *   .catch(console.error);
+   */
+  fetchClientValues(prop, cluster) {
+    return this._performOnClusters('fetchClientValue', [prop], cluster);
+  }
+
+  /**
+   * Runs a method with given arguments on all shards, or a given shard.
+   * @param {string} method Method name to run on each shard
+   * @param {Array<*>} args Arguments to pass through to the method call
+   * @param {number} [cluster] Shard to run on, all if undefined
+   * @returns {Promise<*|Array<*>>} Results of the method execution
+   * @private
+   */
+  _performOnClusters(method, args, cluster) {
+    if (this.clusters.size === 0) return Promise.reject(new Error('CLUSTER_NO_CLUSTERS'));
+
+    if (typeof cluster === 'number') {
+      if (this.clusters.has(cluster)) return this.clusters.get(cluster)[method](...args);
+      return Promise.reject(new Error('CLUSTER_CLUSTER_NOT_FOUND', cluster));
+    }
+
+    if (this.clusters.size !== this.clusterList.length) return Promise.reject(new Error('CLUSTER_IN_PROCESS'));
+
+    const promises = [];
+    for (const cl of this.clusters.values()) promises.push(cl[method](...args));
+    return Promise.all(promises);
+  }
+
+  /**
+   * Options used to respawn all shards.
+   * @typedef {Object} MultipleShardRespawnOptions
+   * @property {number} [shardDelay=5000] How long to wait between shards (in milliseconds)
+   * @property {number} [respawnDelay=500] How long to wait between killing a shard's process and restarting it
+   * (in milliseconds)
+   * @property {number} [timeout=30000] The amount in milliseconds to wait for a shard to become ready before
+   * continuing to another (`-1` or `Infinity` for no wait)
+   */
+
+  /**
+   * Kills all running shards and respawns them.
+   * @param {MultipleShardRespawnOptions} [options] Options for respawning shards
+   * @returns {Promise<Collection<string, Shard>>}
+   */
+  async respawnAll({ shardDelay = 5000, respawnDelay = 500, timeout = 30000 } = {}) {
+    let s = 0;
+    for (const cluster of this.clusters.values()) {
+      const promises = [cluster.respawn({ respawnDelay, timeout })];
+      if (++s < this.clusters.size && shardDelay > 0) promises.push(Util.delayFor(shardDelay));
+      await Promise.all(promises); // eslint-disable-line no-await-in-loop
+    }
+    return this.clusters;
+  }
 }
 
 module.exports = ClusterManager;

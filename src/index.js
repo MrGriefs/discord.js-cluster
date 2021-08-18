@@ -1,6 +1,8 @@
-const Sharder = require('./sharding/clustermanager.js');
-const Base = require("./structures/Base.js");
+'use strict';
+
 module.exports = {
-    Master: Sharder,
-    Base: Base
+  ClusterManager: require('./sharding/ClusterManager.js'),
+  Cluster: require('./sharding/Cluster.js'),
+  Client: require('./Client'),
+  Logger: require('./util/Logger'),
 };

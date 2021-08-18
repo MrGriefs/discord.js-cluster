@@ -1,314 +1,413 @@
-const Discord = require('discord.js');
-const Base = require("../structures/Base.js");
-const { inspect } = require('util');
-const IPC = require("../structures/IPC.js");
-const nath = require('path');
+'use strict';
+
+const EventEmitter = require('events');
+const path = require('path');
+const { Util } = require('discord.js');
+const { Error } = require('../errors');
+let childProcess = null;
+let Worker = null;
 
 /**
- * 
- * 
- * @class Cluster
+ * A self-contained shard created by the {@link ClusterManager}. Each one has a {@link ChildProcess} that contains
+ * an instance of the bot and its {@link Client}. When its child process/worker exits for any reason, the shard will
+ * spawn a new one to replace it as necessary.
+ * @extends EventEmitter
  */
-class Cluster {
+class Cluster extends EventEmitter {
+  /**
+   * @param {ClusterManager} manager Manager that is creating this cluster
+   * @param {number} id The cluster's id
+   * @param {number[]} shards The list of shards to spawn
+   */
+  constructor(manager, id, shards) {
+    super();
+
+    if (manager.mode === 'process') childProcess = require('child_process');
+    else if (manager.mode === 'worker') Worker = require('worker_threads').Worker;
 
     /**
-     * Creates an instance of Cluster.
-     * @memberof Cluster
+     * Manager that created the shard
+     * @type {ClusterManager}
      */
-    constructor(client, { debug }) {
+    this.manager = manager;
 
-        this.shards = 0;
-        this.maxShards = 0;
-        this.firstShardID = 0;
-        this.lastShardID = 0;
-        this.mainFile = null;
-        this.clusterID = 0;
-        this.clusterCount = 0;
-        this.guilds = 0;
-        this.users = 0;
-        this.uptime = 0;
-        this.exclusiveGuilds = 0;
-        this.largeGuilds = 0;
-        this.channels = 0;
-        this.shardsStats = [];
-        this.app = null;
-        this.bot = null;
-        this.test = false;
-        this.debug = debug;
-        /** @private */
-        this._client = client;
+    /**
+     * The cluster's id in the manager
+     * @type {number}
+     */
+    this.id = id ?? Number(process.env.CLUSTERS);
 
-        this.ipc = new IPC();
+    /**
+     * Arguments for the cluster's process (only when {@link ClusterManager#mode} is `process`)
+     * @type {string[]}
+     */
+    this.args = manager.clusterArgs ?? [];
 
-        console.log = (str) => process.send({ name: "log", msg: this.logOverride(str) });
-        console.error = (str) => process.send({ name: "error", msg: this.logOverride(str) });
-        console.warn = (str) => process.send({ name: "warn", msg: this.logOverride(str) });
-        console.info = (str) => process.send({ name: "info", msg: this.logOverride(str) });
-        console.debug = (str) => process.send({ name: "debug", msg: this.logOverride(str) });
+    /**
+     * Arguments for the shard's process executable (only when {@link ClusterManager#mode} is `process`)
+     * @type {string[]}
+     */
+    this.execArgv = manager.execArgv;
 
+    /**
+     * The shards this cluster managers
+     * @type {number[]}
+     */
+    this.shards = shards ?? JSON.parse(process.env.SHARDS);
+
+    /**
+     * Environment variables for the cluster's process, or workerData for the cluster's worker
+     * @type {Object}
+     */
+    this.env = Object.assign({}, process.env, {
+      CLUSTER_MANAGER: true,
+      CLUSTERS: this.id,
+      CLUSTER_COUNT: process.env.CLUSTER_COUNT,
+      SHARDS: JSON.stringify(this.shards),
+      SHARD_COUNT: process.env.SHARD_COUNT ?? this.shards.length,
+      DISCORD_TOKEN: this.manager.token,
+    });
+
+    /**
+     * Whether the cluster's {@link Client} is ready
+     * @type {boolean}
+     */
+    this.ready = false;
+
+    /**
+     * Process of the cluster (if {@link ClusterManager#mode} is `process`)
+     * @type {?ChildProcess}
+     */
+    this.process = null;
+
+    /**
+     * Worker of the cluster (if {@link ClusterManager#mode} is `worker`)
+     * @type {?Worker}
+     */
+    this.worker = null;
+
+    /**
+     * Ongoing promises for calls to {@link Cluster#eval}, mapped by the `script` they were called with
+     * @type {Map<string, Promise>}
+     * @private
+     */
+    this._evals = new Map();
+
+    /**
+     * Ongoing promises for calls to {@link Cluster#fetchClientValue}, mapped by the `prop` they were called with
+     * @type {Map<string, Promise>}
+     * @private
+     */
+    this._fetches = new Map();
+
+    /**
+     * Listener function for the {@link ChildProcess}' `exit` event
+     * @type {Function}
+     * @private
+     */
+    this._exitListener = this._handleExit.bind(this, undefined);
+  }
+
+  /**
+   * Forks a child process or creates a worker thread for the cluster.
+   * <warn>You should not need to call this manually.</warn>
+   * @param {number} [timeout=30000] The amount in milliseconds to wait until the {@link Client} has become ready
+   * before resolving (`-1` or `Infinity` for no wait)
+   * @returns {Promise<ChildProcess>}
+   */
+  spawn(timeout = 30000) {
+    if (this.process) throw new Error('CLUSTER_PROCESS_EXISTS', this.id);
+    if (this.worker) throw new Error('CLUSTER_WORKER_EXISTS', this.id);
+
+    if (this.manager.mode === 'process') {
+      this.process = childProcess
+        .fork(path.resolve(this.manager.file), this.args, {
+          env: this.env,
+          execArgv: this.execArgv,
+        })
+        .on('message', this._handleMessage.bind(this))
+        .on('exit', this._exitListener);
+    } else if (this.manager.mode === 'worker') {
+      this.worker = new Worker(path.resolve(this.manager.file), { workerData: this.env })
+        .on('message', this._handleMessage.bind(this))
+        .on('exit', this._exitListener);
     }
 
-    logOverride(message) {
-        if (typeof message !== 'string') return inspect(message);
-        else return message;
+    this._evals.clear();
+    this._fetches.clear();
+
+    const child = this.process ?? this.worker;
+
+    /**
+     * Emitted upon the creation of the cluster's child process/worker.
+     * @event Cluster#spawn
+     * @param {ChildProcess|Worker} process Child process/worker that was created
+     */
+    this.emit('spawn', child);
+
+    if (timeout === -1 || timeout === Infinity) return child;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(spawnTimeoutTimer);
+        this.off('ready', onReady);
+        this.off('disconnect', onDisconnect);
+        this.off('death', onDeath);
+      };
+
+      const onReady = () => {
+        cleanup();
+        resolve(child);
+      };
+
+      const onDisconnect = () => {
+        cleanup();
+        reject(new Error('CLUSTER_READY_DISCONNECTED', this.id));
+      };
+
+      const onDeath = () => {
+        cleanup();
+        reject(new Error('CLUSTER_READY_DIED', this.id));
+      };
+
+      const onTimeout = () => {
+        cleanup();
+        reject(new Error('CLUSTER_READY_TIMEOUT', this.id));
+      };
+
+      const spawnTimeoutTimer = setTimeout(onTimeout, timeout * this.shards.length);
+      this.once('ready', onReady);
+      this.once('disconnect', onDisconnect);
+      this.once('death', onDeath);
+    });
+  }
+
+  /**
+   * Immediately kills the cluster's process/worker and does not restart it.
+   */
+  kill() {
+    if (this.process) {
+      this.process.removeListener('exit', this._exitListener);
+      this.process.kill();
+    } else {
+      this.worker.removeListener('exit', this._exitListener);
+      this.worker.terminate();
     }
 
-    spawn() {
-        process.on('uncaughtException', (err) => {
-            process.send({ name: "error", msg: err.stack });
+    this._handleExit(false);
+  }
+
+  /**
+   * Options used to respawn a cluster.
+   * @typedef {Object} ClusterRespawnOptions
+   * @property {number} [delay=500] How long to wait between killing the process/worker and
+   * restarting it (in milliseconds)
+   * @property {number} [timeout=30000] The amount in milliseconds to wait until the {@link Client}
+   * has become ready before resolving (`-1` or `Infinity` for no wait)
+   */
+
+  /**
+   * Kills and restarts the cluster's process/worker.
+   * @param {ClusterRespawnOptions} [options] Options for respawning the cluster
+   * @returns {Promise<ChildProcess>}
+   */
+  async respawn({ delay = 500, timeout = 30000 } = {}) {
+    this.kill();
+    if (delay > 0) await Util.delayFor(delay);
+    return this.spawn(timeout);
+  }
+
+  /**
+   * Sends a message to the cluster's process/worker.
+   * @param {*} message Message to send to the shard
+   * @returns {Promise<Cluster>}
+   */
+  send(message) {
+    return new Promise((resolve, reject) => {
+      if (this.process) {
+        this.process.send(message, err => {
+          if (err) reject(err);
+          else resolve(this);
         });
+      } else {
+        this.worker.postMessage(message);
+        resolve(this);
+      }
+    });
+  }
 
-        process.on('unhandledRejection',
+  /**
+   * Fetches a client property value of the cluster.
+   * @param {string} prop Name of the client property to get, using periods for nesting
+   * @returns {Promise<*>}
+   * @example
+   * cluster.fetchClientValue('guilds.cache.size')
+   *   .then(count => console.log(`${count} guilds in cluster ${cluster.id}`))
+   *   .catch(console.error);
+   */
+  fetchClientValue(prop) {
+    // Cluster is dead (maybe respawning), don't cache anything and error immediately
+    if (!this.process && !this.worker) return Promise.reject(new Error('CLUSTER_NO_CHILD_EXISTS', this.id));
+
+    // Cached promise from previous call
+    if (this._fetches.has(prop)) return this._fetches.get(prop);
+
+    const promise = new Promise((resolve, reject) => {
+      const child = this.process ?? this.worker;
+
+      const listener = message => {
+        if (message?._fetchProp !== prop) return;
+        child.removeListener('message', listener);
+        this._fetches.delete(prop);
+        resolve(message._result);
+      };
+      child.on('message', listener);
+
+      this.send({ _fetchProp: prop }).catch(err => {
+        child.removeListener('message', listener);
+        this._fetches.delete(prop);
+        reject(err);
+      });
+    });
+
+    this._fetches.set(prop, promise);
+    return promise;
+  }
+
+  /**
+   * Evaluates a script or function on the cluster, in the context of the {@link Client}.
+   * @param {string|Function} script JavaScript to run on the cluster
+   * @returns {Promise<*>} Result of the script execution
+   */
+  eval(script) {
+    // Cluster is dead (maybe respawning), don't cache anything and error immediately
+    if (!this.process && !this.worker) return Promise.reject(new Error('CLUSTER_NO_CHILD_EXISTS', this.id));
+
+    // Cached promise from previous call
+    if (this._evals.has(script)) return this._evals.get(script);
+
+    const promise = new Promise((resolve, reject) => {
+      const child = this.process ?? this.worker;
+
+      const listener = message => {
+        if (message?._eval !== script) return;
+        child.removeListener('message', listener);
+        this._evals.delete(script);
+        if (!message._error) resolve(message._result);
+        else reject(Util.makeError(message._error));
+      };
+      child.on('message', listener);
+
+      const _eval = typeof script === 'function' ? `(${script})(this)` : script;
+      this.send({ _eval }).catch(err => {
+        child.removeListener('message', listener);
+        this._evals.delete(script);
+        reject(err);
+      });
+    });
+
+    this._evals.set(script, promise);
+    return promise;
+  }
+
+  /**
+   * Handles a message received from the child process/worker.
+   * @param {*} message Message received
+   * @private
+   */
+  _handleMessage(message) {
+    if (message) {
+      // Cluster is ready
+      if (message._ready) {
+        this.ready = true;
         /**
-         * @param {Error} reason
-         * @param {Promise} p
+         * Emitted upon the cluster's {@link Client#ready} event.
+         * @event Cluster#ready
          */
-        (reason, p) => {
-            process.send({ name: "error", msg: `Unhandled rejection at: Promise  ${p} reason:  ${reason.stack}` });
+        this.emit('ready');
+        return;
+      }
+
+      // Cluster has disconnected
+      if (message._disconnect) {
+        this.ready = false;
+        /**
+         * Emitted upon the cluster's {@link Client#disconnect} event.
+         * @event Cluster#disconnect
+         */
+        this.emit('disconnect');
+        return;
+      }
+
+      // Cluster is attempting to reconnect
+      if (message._reconnecting) {
+        this.ready = false;
+        /**
+         * Emitted upon the cluster's {@link Client#reconnecting} event.
+         * @event Cluster#reconnecting
+         */
+        this.emit('reconnecting');
+        return;
+      }
+
+      // Cluster is requesting a property fetch
+      if (message._sFetchProp) {
+        const resp = { _sFetchProp: message._sFetchProp, _sFetchPropShard: message._sFetchPropShard };
+        this.manager.fetchClientValues(message._sFetchProp, message._sFetchPropShard).then(
+          results => this.send({ ...resp, _result: results }),
+          err => this.send({ ...resp, _error: Util.makePlainError(err) }),
+        );
+        return;
+      }
+
+      // Cluster is requesting an eval broadcast
+      if (message._sEval) {
+        const resp = { _sEval: message._sEval, _sEvalShard: message._sEvalShard };
+        this.manager._performOnClusters('eval', [message._sEval], message._sEvalShard).then(
+          results => this.send({ ...resp, _result: results }),
+          err => this.send({ ...resp, _error: Util.makePlainError(err) }),
+        );
+        return;
+      }
+
+      // Cluster is requesting a respawn of all clusters
+      if (message._sRespawnAll) {
+        const { shardDelay, respawnDelay, timeout } = message._sRespawnAll;
+        this.manager.respawnAll({ shardDelay, respawnDelay, timeout }).catch(() => {
+          // Do nothing
         });
-
-
-        process.on("message", msg => {
-            if (msg.name) {
-                switch (msg.name) {
-                    case "connect": {
-                        this.firstShardID = msg.firstShardID;
-                        this.lastShardID = msg.lastShardID;
-                        this.mainFile = msg.file;
-                        this.clusterID = msg.id;
-                        this.clusterCount = msg.clusterCount;
-                        this.shards = (this.lastShardID - this.firstShardID) + 1;
-                        this.maxShards = msg.maxShards;
-
-                        if (this.shards < 1) return;
-
-                        if (msg.test) {
-                            this.test = true;
-                        }
-
-                        this.connect(msg.firstShardID, msg.lastShardID, this.maxShards, msg.token, "connect", msg.clientOptions);
-
-                        break;
-                    }
-                    case "stats": {
-                        process.send({
-                            name: "stats", stats: {
-                                guilds: this.guilds,
-                                users: this.users,
-                                uptime: this.uptime,
-                                ram: process.memoryUsage().rss,
-                                shards: this.shards,
-                                exclusiveGuilds: this.exclusiveGuilds,
-                                largeGuilds: this.largeGuilds,
-                                channels: this.channels,
-                                shardsStats: this.shardsStats
-                            }
-                        });
-
-                        break;
-                    }
-                    case "fetchUser": {
-                        if (!this.bot) return;
-                        let id = msg.value;
-                        let user = this.bot.users.resolve(id);
-                        if (user) {
-                            process.send({ name: "fetchReturn", value: user });
-                        }
-
-                        break;
-                    }
-                    case "fetchChannel": {
-                        if (!this.bot) return;
-                        let id = msg.value;
-                        let channel = this.bot.channels.resolve(id);
-                        if (channel) {
-                            process.send({ name: "fetchReturn", value: channel.toJSON() });
-                        }
-
-                        break;
-                    }
-                    case "fetchGuild": {
-                        if (!this.bot) return;
-                        let id = msg.value;
-                        let guild = this.bot.guilds.resolve(id);
-                        if (guild) {
-                            process.send({ name: "fetchReturn", value: guild.toJSON() });
-                        }
-
-                        break;
-                    }
-                    case "fetchMember": {
-                        if (!this.bot) return;
-                        let [guildID, memberID] = msg.value;
-
-                        let guild = this.bot.guilds.resolve(guildID);
-
-                        if (guild) {
-                            let member = guild.members.resolve(memberID);
-
-                            if (member) {
-                                process.send({ name: "fetchReturn", value: member.toJSON() });
-                            }
-                        }
-
-                        break;
-                    }
-                    case "fetchReturn":
-                        this.ipc.emit(msg.id, msg.value);
-                        break;
-                    case "restart":
-                        process.exit(1);
-                        break;
-                    case "eval":
-                        try { (0, eval)(msg.message) }
-                        catch(e) { console.error(`Error while evaluating: `, e) };
-                        break;
-                }
-            }
-        });
+        return;
+      }
     }
 
     /**
-     * 
-     * 
-     * @param {any} firstShardID 
-     * @param {any} lastShardID 
-     * @param {any} maxShards 
-     * @param {any} token 
-     * @param {any} type 
-     * @memberof Cluster
+     * Emitted upon receiving a message from the child process/worker.
+     * @event Cluster#message
+     * @param {*} message Message that was received
      */
-    connect(firstShardID, lastShardID, maxShards, token, type, clientOptions) {
-        process.send({ name: "log", msg: `Connecting with ${this.shards} shard(s)` });
+    this.emit('message', message);
+  }
 
-        // let options = { autoreconnect: true, firstShardID: firstShardID, lastShardID: lastShardID, maxShards: maxShards };
-        let options = {
-            shards: Array.from({ length: lastShardID - firstShardID + 1 }, (_, i) => firstShardID + i),
-            shardCount: maxShards,
-            retryLimit: Infinity
-        };
-        Object.keys(options).forEach(key => {
-            delete clientOptions[key];
-        });
+  /**
+   * Handles the shard's process/worker exiting.
+   * @param {boolean} [respawn=this.manager.respawn] Whether to spawn the shard again
+   * @private
+   */
+  _handleExit(respawn = this.manager.clusterRespawn) {
+    /**
+     * Emitted upon the shard's child process/worker exiting.
+     * @event Cluster#death
+     * @param {ChildProcess|Worker} process Child process/worker that exited
+     */
+    this.emit('death', this.process ?? this.worker);
 
-        Object.assign(options, clientOptions);
+    this.ready = false;
+    this.process = null;
+    this.worker = null;
+    this._evals.clear();
+    this._fetches.clear();
 
-        const bot = new this._client(options);
-        this.bot = bot;
-
-        // this.bot.requestHandler = new SyncedRequestHandler(this.ipc, {
-        //     timeout: this.bot.options.requestTimeout
-        // });
-
-        if (this.debug) bot.on('debug', console.debug);
-
-        bot.on("connect", id => {
-            process.send({ name: "log", msg: `Shard ${id} established connection!` });
-        });
-
-        bot.on("shardDisconnect", (err, id) => {
-            process.send({ name: "log", msg: `Shard ${id} disconnected!` });
-            let embed = {
-                title: "Shard Status Update",
-                description: `Shard ${id} disconnected!`
-            }
-            process.send({ name: "shard", embed: embed });
-        });
-
-        bot.on("shardReady", id => {
-            process.send({ name: "log", msg: `Shard ${id} is ready!` });
-            let embed = {
-                title: "Shard Status Update",
-                description: `Shard ${id} is ready!`
-            }
-            process.send({ name: "shard", embed: embed });
-        });
-
-        bot.on("shardReconnecting", id => {
-            process.send({ name: "log", msg: `Shard ${id} is reconnecting!` });
-            let embed = {
-                title: "Shard Status Update",
-                description: `Shard ${id} reconnecting!`
-            }
-            process.send({ name: "shard", embed: embed });
-        });
-
-        bot.on("shardResume", id => {
-            process.send({ name: "log", msg: `Shard ${id} has resumed!` });
-            let embed = {
-                title: "Shard Status Update",
-                description: `Shard ${id} resumed!`
-            }
-            process.send({ name: "shard", embed: embed });
-        });
-
-        bot.on("shardError", (error, id) => {
-            process.send({ name: "error", msg: `Shard ${id} | ${error.stack}` });
-        });
-
-        bot.on("warn", (message) => {
-            process.send({ name: "warn", msg: `${message}` });
-        });
-
-        bot.on("error", (error) => {
-            process.send({ name: "error", msg: `${error.stack}` });
-        });
-
-        bot.once("ready", _ => {
-            this.loadCode(bot);
-
-            this.startStats(bot);
-        });
-
-        bot.on("ready", _ => {
-            process.send({ name: "log", msg: `Shards ${this.firstShardID} - ${this.lastShardID} are ready!` });
-            let embed = {
-                title: `Cluster ${this.clusterID} is ready!`,
-                description: `Shards ${this.firstShardID} - ${this.lastShardID}`
-            }
-            process.send({ name: "cluster", embed: embed });
-
-            process.send({ name: "shardsStarted" });
-        });
-
-        if (!this.test) {
-            bot.login(token);
-        } else {
-            process.send({ name: "shardsStarted" });
-            this.loadCode(bot);
-        }
-    }
-
-    loadCode(bot) {
-        let app = require(nath.isAbsolute(this.mainFile) ? this.mainFile : nath.join(process.cwd(), this.mainFile));
-        if (app.default !== undefined) app = app.default;
-        if (app.prototype instanceof Base) {
-            this.app = new app({ bot: bot, clusterID: this.clusterID, ipc: this.ipc });
-            this.app.launch();
-        } else {
-            console.error("Your code has not been loaded! This is due to it not extending the Base class. Please extend the Base class!");
-        }
-    }
-
-    startStats(bot) {
-        setInterval(() => {
-            this.guilds = bot.guilds.cache.size;
-            this.users = bot.users.cache.size;
-            this.uptime = bot.uptime;
-            this.channels = bot.channels.cache.size;
-            this.largeGuilds = bot.guilds.cache.filter(g => g.large).size;
-            this.exclusiveGuilds = bot.guilds.cache.filter(g => g.members.cache.filter(m => m.bot).length === 1).size;
-            this.shardsStats = [];
-            this.bot.ws.shards.forEach(shard => {
-                this.shardsStats.push({
-                    id: shard.id,
-                    ping: shard.ping,
-                    status: shard.status
-                });
-            });
-        }, 1000 * 5);
-    }
+    if (respawn) this.spawn().catch(err => this.emit('error', err));
+  }
 }
-
 
 module.exports = Cluster;
