@@ -3,12 +3,21 @@
 const clu = require('cluster');
 const EventEmitter = require('events');
 const fs = require('fs');
+const numCPUs = require('os').cpus().length;
 const path = require('path');
 const { Collection } = require('@discordjs/collection');
 const { Client } = require('discord.js');
 const Cluster = require('./Cluster');
 const { Error, TypeError, RangeError } = require('../errors');
 const Util = require('../util/Util');
+
+if (numCPUs < 2) {
+  console.warn(`
+  The discord.js-cluster library is intended for the use of multiprocessing.
+  Your system is not capable of multiprocessing and therefore you
+  will not see any performance increase using this library.
+`);
+}
 
 /**
  * This is a utility class that makes multi-process sharding of a bot an easy and painless experience.
@@ -31,6 +40,7 @@ class ClusterManager extends EventEmitter {
    * The options to spawn shards with for a {@link ClusterManager}.
    * @typedef {Object} ShardingManagerOptions
    * @property {string|number} [totalClusters='auto'] Number of total clusters of all cluster managers or "auto"
+   * <warn>It is not recommended to spawn more clusters than CPUs.</warn>
    * @property {string|number} [totalShards='auto'] Number of total shards of all cluster managers or "auto"
    * @property {string|number[]} [clusterList='auto'] List of clusters to spawn or "auto"
    * @property {string|number[]} [shardList='auto'] List of shards to spawn or "auto"
@@ -231,12 +241,6 @@ class ClusterManager extends EventEmitter {
   createCluster() {
     if (clu.isPrimary) throw new Error('CLUSTER_IS_PRIMARY');
     const cl = (this.cluster = new Cluster(this));
-    /**
-     * Emitted upon creating a shard.
-     * @event ClusterManager#clusterCreate
-     * @param {Cluster} cluster Cluster that was created
-     */
-    this.emit('clusterCreate', cl);
     return cl;
   }
 
@@ -296,7 +300,7 @@ class ClusterManager extends EventEmitter {
 
     // Obtain/verify the number of clusters to spawn
     if (clusters === 'auto') {
-      clusters = require('os').cpus().length;
+      clusters = numCPUs;
     } else {
       if (typeof clusters !== 'number' || isNaN(clusters)) {
         throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'a number.');
@@ -305,6 +309,13 @@ class ClusterManager extends EventEmitter {
       if (!Number.isInteger(clusters)) {
         throw new TypeError('CLIENT_INVALID_OPTION', 'Amount of clusters', 'an integer.');
       }
+    }
+
+    if (clusters > numCPUs) {
+      this.emit(
+        'warn',
+        'Spawning more clusters than available CPUs is not recommended and will not increase performance.',
+      );
     }
 
     // Split the list of shards into chunks and ensure this many clusters are needed
@@ -436,3 +447,9 @@ class ClusterManager extends EventEmitter {
 }
 
 module.exports = ClusterManager;
+
+/**
+ * Emitted for general warnings.
+ * @event Client#warn
+ * @param {string} info The warning
+ */
