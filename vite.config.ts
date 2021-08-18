@@ -9,6 +9,7 @@ import { execSync } from 'child_process';
 import { readFileSync } from 'fs';
 
 export default defineConfig({
+	base: '/discord.js-cluster/',
 	resolve: {
 		alias: {
 			'~/': `${resolve(__dirname, 'src')}/`,
@@ -25,7 +26,7 @@ export default defineConfig({
 		VitePWA({
 			srcDir: 'src',
 			filename: 'sw.ts',
-			base: '/',
+			base: '/discord.js-cluster/',
 			strategies: 'injectManifest',
 			registerType: 'autoUpdate',
 			manifest: {
