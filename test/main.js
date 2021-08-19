@@ -1,7 +1,8 @@
-const { Client } = require("../src/index");
+const { Client, Logger } = require("../src/index");
 const { Intents } = require('discord.js');
 
 const client = new Client({
+    logger: false,
     intents: [
         Intents.FLAGS.GUILD_MESSAGES,
         Intents.FLAGS.GUILDS

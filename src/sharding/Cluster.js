@@ -8,9 +8,9 @@ let childProcess = null;
 let worker = null;
 
 /**
- * A self-contained shard created by the {@link ClusterManager}. Each one has a {@link ChildProcess} that contains
- * an instance of the bot and its {@link Client}. When its child process/worker exits for any reason, the shard will
- * spawn a new one to replace it as necessary.
+ * A self-contained cluster created by the {@link ClusterManager}. Each one has a {@link ChildProcess} that contains
+ * an instance of the bot and its {@link ClusterClient}. When its worker/child process exits for any reason, the cluster
+ * will spawn a new one to replace it as necessary.
  * @extends EventEmitter
  */
 class Cluster extends EventEmitter {
@@ -18,8 +18,9 @@ class Cluster extends EventEmitter {
    * @param {ClusterManager} manager Manager that is creating this cluster
    * @param {number} id The cluster's id
    * @param {number[]} shards The list of shards to spawn
+   * @param {number} totalShards The total amount of shards being spawned
    */
-  constructor(manager, id, shards) {
+  constructor(manager, id, shards, totalShards) {
     super();
 
     if (manager.mode === 'process') childProcess = require('child_process');
@@ -64,7 +65,7 @@ class Cluster extends EventEmitter {
       CLUSTERS: this.id,
       CLUSTER_COUNT: process.env.CLUSTER_COUNT,
       SHARDS: JSON.stringify(this.shards),
-      SHARD_COUNT: process.env.SHARD_COUNT ?? this.shards.length,
+      SHARD_COUNT: process.env.SHARD_COUNT ?? totalShards,
       DISCORD_TOKEN: this.manager.token,
     });
 

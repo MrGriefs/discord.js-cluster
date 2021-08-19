@@ -7,23 +7,23 @@ const { Error } = require('../errors');
 const Util = require('../util/Util');
 
 /**
- * Helper class for sharded clients spawned as a child process/worker, such as from a {@link ShardingManager}.
+ * Helper class for clustered clients spawned as a worker/child process, such as from a {@link ClusterManager}.
  * Utilises IPC to send and receive data to/from the master process and other shards.
  */
 class ClusterClientUtil {
   /**
-   * @param {Client} client Client of the current shard
-   * @param {ClusterManagerMode} mode Mode the shard was spawned with
+   * @param {Client} client Client of the current cluster
+   * @param {ClusterManagerMode} mode Mode the cluster was spawned with
    */
   constructor(client, mode) {
     /**
-     * Client for the shard
+     * Client for the cluster
      * @type {Client}
      */
     this.client = client;
 
     /**
-     * Mode the shard was spawned with
+     * Mode the cluster was spawned with
      * @type {ClusterManagerMode}
      */
     this.mode = mode;
@@ -46,7 +46,7 @@ class ClusterClientUtil {
    * @readonly
    */
   get id() {
-    return JSON.parse((require('worker_threads').workerData ?? process.env).CLUSTERS);
+    return JSON.parse(process.env.CLUSTERS);
   }
 
   /**
@@ -55,7 +55,7 @@ class ClusterClientUtil {
    * @readonly
    */
   get count() {
-    return Number((require('worker_threads').workerData ?? process.env).CLUSTER_COUNT);
+    return Number(process.env.CLUSTER_COUNT);
   }
 
   /**
@@ -145,13 +145,13 @@ class ClusterClientUtil {
   }
 
   /**
-   * Requests a respawn of all shards.
-   * @param {MultipleShardRespawnOptions} [options] Options for respawning shards
+   * Requests a respawn of all clusters.
+   * @param {MultipleClusterRespawnOptions} [options] Options for respawning clusters
    * @returns {Promise<void>} Resolves upon the message being sent
    * @see {@link ClusterManager#respawnAll}
    */
-  respawnAll({ shardDelay = 5000, respawnDelay = 500, timeout = 30000 } = {}) {
-    return this.send({ _sRespawnAll: { shardDelay, respawnDelay, timeout } });
+  respawnAll({ clusterDelay = 5000, respawnDelay = 500, timeout = 30000 } = {}) {
+    return this.send({ _sRespawnAll: { clusterDelay, respawnDelay, timeout } });
   }
 
   /**
@@ -206,7 +206,7 @@ class ClusterClientUtil {
     } else {
       client.emit(
         Events.WARN,
-        'Multiple clients created in child process/worker; only the first will handle sharding helpers.',
+        'Multiple clients created in worker/child process; only the first will handle sharding helpers.',
       );
     }
     return this._singleton;

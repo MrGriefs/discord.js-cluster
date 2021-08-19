@@ -137,3 +137,11 @@ export interface MultipleClusterSpawnOptions {
   delay?: number;
   timeout?: number;
 }
+
+export interface ClusterClientOptions extends ClientOptions {
+  logger?: boolean | {[k: string]: any};
+}
+
+export { ClientOptions, Shard, ShardClientUtil } from 'discord.js';
+export { ChildProcess } from 'child_process';
+export { Worker } from 'cluster';

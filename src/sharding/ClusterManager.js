@@ -12,15 +12,15 @@ const Util = require('../util/Util');
 
 if (numCPUs < 2) {
   console.warn(`
-  The discord.js-cluster library is intended for the use of multiprocessing.
-  Your system is not capable of multiprocessing and therefore you
+  The discord.js-cluster library is intended for the use of multi-core processing.
+  Your system is not capable of multi-core processing and therefore you
   will not see any performance increase using this library.
 `);
 }
 
 /**
- * This is a utility class that makes multi-process sharding of a bot an easy and painless experience.
- * It works by spawning a self-contained {@link ChildProcess} or {@link Worker} for each individual shard, each
+ * This is a utility class that makes multi-core clustering of a bot an easy and painless experience.
+ * It works by spawning a self-contained {@link ChildProcess} or {@link Worker} for each individual cluster, each
  * containing its own instance of your bot's {@link Client}. They all have a line of communication with the master
  * process, and there are several useful methods that utilise it in order to simplify tasks that are normally difficult
  * with sharding. It can spawn a specific number of shards or the amount that Discord suggests for the bot, and takes a
@@ -29,15 +29,15 @@ if (numCPUs < 2) {
  */
 class ClusterManager extends EventEmitter {
   /**
-   * The mode to spawn shards with for a {@link ClusterManager}. Can be either one of:
+   * The mode to spawn clusters with for a {@link ClusterManager}. Can be either one of:
+   * * 'worker' to use [cluster Workers](https://nodejs.org/api/cluster.html)
    * * 'process' to use child processes
-   * * 'worker' to use [Worker threads](https://nodejs.org/api/worker_threads.html)
    * @typedef {string} ClusterManagerMode
    */
 
   /**
-   * The options to spawn shards with for a {@link ClusterManager}.
-   * @typedef {Object} ShardingManagerOptions
+   * The options to spawn clusters and shards with for a {@link ClusterManager}.
+   * @typedef {Object} ClusterManagerOptions
    * @property {string|number} [totalClusters='auto'] Number of total clusters of all cluster managers or "auto"
    * <warn>It is not recommended to spawn more clusters than CPUs.</warn>
    * @property {string|number} [totalShards='auto'] Number of total shards of all cluster managers or "auto"
@@ -49,16 +49,18 @@ class ClusterManager extends EventEmitter {
    * <info>Multiprocessing is only available for workers</info>
    * @property {boolean} [clusterRespawn=true] Whether clusters should automatically respawn upon exiting
    * @property {boolean} [shardRespawn=true] Whether shards should automatically respawn upon exiting
+   * @property {boolean} [useConcurrency=true] Whether the cluster manager should spawn as many
+   * concurrent shards as Discord allows
+   * @property {boolean} [silent=false] Suppresses stdio from clusters
+   * @property {string[]} [clusterArgs=[]] Arguments to pass to the cluster script when spawning
    * @property {string[]} [shardArgs=[]] Arguments to pass to the shard script when spawning
-   * (only available when mode is set to 'process')
-   * @property {string} [execArgv=[]] Arguments to pass to the shard script executable when spawning
-   * (only available when mode is set to 'process')
-   * @property {string} [token] Token to use for automatic shard count and passing to shards
+   * @property {string} [execArgv=[]] Arguments to pass to the cluster script executable when spawning
+   * @property {string} [token] Token to use for automatic shard count and passing to clusters
    */
 
   /**
-   * @param {string} file Path to your shard script file
-   * @param {ShardingManagerOptions} [options] Options for the sharding manager
+   * @param {string} file Path to your cluster script file
+   * @param {ClusterManagerOptions} [options] Options for the cluster manager
    */
   constructor(file, options = {}) {
     super();
@@ -70,6 +72,8 @@ class ClusterManager extends EventEmitter {
         mode: 'worker',
         clusterRespawn: true,
         shardRespawn: true,
+        useConcurrency: true,
+        silent: false,
         clusterArgs: [],
         shardArgs: [],
         execArgv: [],
@@ -79,7 +83,7 @@ class ClusterManager extends EventEmitter {
     );
 
     /**
-     * Path to the shard script file
+     * Path to the cluster script file
      * @type {string}
      */
     this.file = file;
@@ -125,7 +129,7 @@ class ClusterManager extends EventEmitter {
     }
 
     /**
-     * List of shards this sharding manager spawns
+     * List of shards this cluster manager spawns
      * @type {string|number[]}
      */
     this.shardList = options.shardList ?? 'auto';
@@ -190,6 +194,18 @@ class ClusterManager extends EventEmitter {
     this.shardRespawn = options.shardRespawn;
 
     /**
+     * Whether the cluster manager should spawn as many concurrent shards as Discord allows
+     * @type {boolean}
+     */
+    this.useConcurrency = options.useConcurrency;
+
+    /**
+     * Suppresses stdio from clusters
+     * @type {boolean}
+     */
+    this.silent = options.silent;
+
+    /**
      * An array of arguments to pass to clusters (only when {@link ClusterManager#mode} is `process`)
      * @type {string[]}
      */
@@ -230,10 +246,11 @@ class ClusterManager extends EventEmitter {
    * @param {number} [id=this.shards.size] Id of the shard to create
    * <info>This is usually not necessary to manually specify.</info>
    * @param {number[]} shards List of shard ids to spawn in this cluster
+   * @param {number} [totalShards=this.totalShards] The amount of shards being spawned
    * @returns {Cluster} Note that the created shard needs to be explicitly spawned using its spawn method.
    */
-  createCluster(id = this.clusters.size, shards) {
-    const cluster = new Cluster(this, id, shards);
+  createCluster(id = this.clusters.size, shards, totalShards = this.totalShards) {
+    const cluster = new Cluster(this, id, shards, totalShards);
     this.clusters.set(id, cluster);
     /**
      * Emitted upon creating a cluster.
@@ -264,6 +281,7 @@ class ClusterManager extends EventEmitter {
       exec: this.file,
       args: this.clusterArgs,
       execArgv: this.execArgv,
+      silent: this.silent,
     });
 
     // Obtain/verify the number of shards to spawn
@@ -311,6 +329,11 @@ class ClusterManager extends EventEmitter {
     }
 
     if (clusters > numCPUs) {
+      /**
+       * Emitted for general warnings.
+       * @event ClusterManager#warn
+       * @param {string} info The warning
+       */
       this.emit(
         'warn',
         'Spawning more clusters than available CPUs is not recommended and will not increase performance.',
@@ -341,20 +364,24 @@ class ClusterManager extends EventEmitter {
     }
 
     // Spawn the clusters
+    const maxConcurrency = this.useConcurrency ? (await Util.fetchSessionStartLimit(this.token)).max_concurrency : 1;
+    const promises = [];
     for (const [clusterId, shardList] of Object.entries(shardChunk)) {
-      const promises = [];
       const cluster = this.createCluster(clusterId, shardList);
       promises.push(cluster.spawn(timeout));
       if (delay > 0 && this.clusters.size !== this.clusterList.length) promises.push(Util.delayFor(delay));
-      await Promise.all(promises); // eslint-disable-line no-await-in-loop
+      if (promises.length % maxConcurrency !== 0 || maxConcurrency === 1) {
+        await Promise.all(promises); // eslint-disable-line no-await-in-loop
+      }
     }
 
+    await Promise.all(promises);
     return this.clusters;
   }
 
   /**
-   * Sends a message to all shards.
-   * @param {*} message Message to be sent to the shards
+   * Sends a message to all clusters.
+   * @param {*} message Message to be sent to the clusters
    * @returns {Promise<Shard[]>}
    */
   broadcast(message) {
@@ -364,14 +391,14 @@ class ClusterManager extends EventEmitter {
   }
 
   /**
-   * Options for {@link ClusterManager#broadcastEval} and {@link ShardClientUtil#broadcastEval}.
+   * Options for {@link ClusterManager#broadcastEval} and {@link ClusterClientUtil#broadcastEval}.
    * @typedef {Object} BroadcastEvalOptions
    * @property {number} [cluster] Shard to run script on, all if undefined
    * @property {*} [context] The JSON-serializable values to call the script with
    */
 
   /**
-   * Evaluates a script on all shards, or a given shard, in the context of the {@link Client}s.
+   * Evaluates a script on all clusters, or a given cluster, in the context of the {@link Client}s.
    * @param {Function} script JavaScript to run on each shard
    * @param {BroadcastEvalOptions} [options={}] The options for the broadcast
    * @returns {Promise<*|Array<*>>} Results of the script execution
@@ -382,9 +409,9 @@ class ClusterManager extends EventEmitter {
   }
 
   /**
-   * Fetches a client property value of each shard, or a given shard.
+   * Fetches a client property value of each cluster, or a given cluster.
    * @param {string} prop Name of the client property to get, using periods for nesting
-   * @param {number} [cluster] Shard to fetch property from, all if undefined
+   * @param {number} [cluster] Cluster to fetch property from, all if undefined
    * @returns {Promise<*|Array<*>>}
    * @example
    * manager.fetchClientValues('guilds.cache.size')
@@ -396,10 +423,10 @@ class ClusterManager extends EventEmitter {
   }
 
   /**
-   * Runs a method with given arguments on all shards, or a given shard.
-   * @param {string} method Method name to run on each shard
+   * Runs a method with given arguments on all clusters, or a given cluster.
+   * @param {string} method Method name to run on each cluster
    * @param {Array<*>} args Arguments to pass through to the method call
-   * @param {number} [cluster] Shard to run on, all if undefined
+   * @param {number} [cluster] Cluster to run on, all if undefined
    * @returns {Promise<*|Array<*>>} Results of the method execution
    * @private
    */
@@ -419,9 +446,9 @@ class ClusterManager extends EventEmitter {
   }
 
   /**
-   * Options used to respawn all shards.
+   * Options used to respawn all clusters.
    * @typedef {Object} MultipleClusterRespawnOptions
-   * @property {number} [shardDelay=5000] How long to wait between shards (in milliseconds)
+   * @property {number} [clusterDelay=5000] How long to wait between clusters (in milliseconds)
    * @property {number} [delay=500] How long to wait between killing a shard's process and restarting it
    * (in milliseconds)
    * @property {number} [timeout=30000] The amount in milliseconds to wait for a shard to become ready before
@@ -433,11 +460,11 @@ class ClusterManager extends EventEmitter {
    * @param {MultipleClusterRespawnOptions} [options] Options for respawning clusters
    * @returns {Promise<Collection<number, Cluster>>}
    */
-  async respawnAll({ shardDelay = 5000, delay = 500, timeout = 30000 } = {}) {
+  async respawnAll({ clusterDelay = 5000, delay = 500, timeout = 30000 } = {}) {
     let s = 0;
     for (const cluster of this.clusters.values()) {
       const promises = [cluster.respawn({ delay, timeout })];
-      if (++s < this.clusters.size && shardDelay > 0) promises.push(Util.delayFor(shardDelay));
+      if (++s < this.clusters.size && clusterDelay > 0) promises.push(Util.delayFor(clusterDelay));
       await Promise.all(promises); // eslint-disable-line no-await-in-loop
     }
     return this.clusters;
@@ -445,9 +472,3 @@ class ClusterManager extends EventEmitter {
 }
 
 module.exports = ClusterManager;
-
-/**
- * Emitted for general warnings.
- * @event Client#warn
- * @param {string} info The warning
- */

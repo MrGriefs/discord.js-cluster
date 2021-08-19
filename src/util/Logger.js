@@ -16,7 +16,7 @@ colors.setTheme({
   error: 'red',
 });
 
-const logs = ['log', 'info', 'warn', 'error', 'data', 'debug'];
+const logs = ['log', 'info', 'warn', 'error', 'debug'];
 
 class Logger extends null {}
 
